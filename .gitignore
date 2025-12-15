@@ -17,6 +17,15 @@ securevision.log
 .DS_Store
 Thumbs.db
 
+
+# Dependencies
+node_modules/
+pip_cache/
+tmp/
+dist/
+build/
+*.egg-info/
+
 # IDE
 .vscode/
 .idea/

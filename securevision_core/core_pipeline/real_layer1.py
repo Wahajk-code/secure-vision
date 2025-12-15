@@ -56,9 +56,12 @@ def get_yolo_detections(frame, frame_number):
     if model is None:
         return detections
     
+    from config import WEAPON_CLASSES, MODEL_PATH_LAYER1, TRACKER_TYPE, USE_CUDA
+    
     # Run tracking
     # persist=True ensures track IDs are maintained across frames
-    results = model.track(frame, persist=True, verbose=False, conf=0.1)
+    device = 0 if USE_CUDA else 'cpu'
+    results = model.track(frame, persist=True, tracker=TRACKER_TYPE, device=device, verbose=False, conf=0.1)
     
     if not results:
         return detections

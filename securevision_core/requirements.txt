@@ -4,3 +4,10 @@ numpy
 ultralytics
 psycopg2-binary
 streamlit-extras
+fastapi
+uvicorn
+python-multipart
+python-jose
+passlib[bcrypt]
+bcrypt
+sqlalchemy

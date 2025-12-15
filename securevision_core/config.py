@@ -4,6 +4,8 @@ import os
 # VIDEO_PATH = 'overridden_by_ui_discovery' 
 VIDEO_PATH = os.path.join(os.path.dirname(__file__), 'testvideos', 'test-ismaeel2.mp4')
 FRAME_RATE = 30
+PROCESSING_WIDTH = 640
+DISPLAY_WIDTH = 1000
 
 # Fight Detection Thresholds
 PROXIMITY_THRESHOLD_METERS = 1.0  # Meters
@@ -12,6 +14,10 @@ SUSTAINED_DURATION_FRAMES = 60    # ~2 seconds at 30 FPS
 # Model Paths (Mock)
 MODEL_PATH_LAYER1 = 'weaponDetection.pt'
 MODEL_PATH_LAYER3 = 'fight_classifier.pt'
+
+# Tracker Configuration
+TRACKER_TYPE = 'botsort.yaml' # Options: 'botsort.yaml', 'bytetrack.yaml'
+USE_CUDA = False # Set to True if NVIDIA GPU is available
 
 # Weapon Detection Classes
 # Standard YOLO classes or custom trained classes for weapons

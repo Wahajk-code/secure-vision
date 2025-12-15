@@ -6,7 +6,7 @@ import time
 import sys
 import io
 import os
-from config import VIDEO_PATH
+from config import VIDEO_PATH, PROCESSING_WIDTH, DISPLAY_WIDTH
 from core_pipeline.pipeline import SecureVisionPipeline
 from utils.logger import setup_logger
 
@@ -40,9 +40,21 @@ def run_dashboard():
         log_placeholder = st.empty()
 
     frame_count = 0
+    fps_placeholder = st.sidebar.empty()
+    prev_time = time.time()
     
     while True:
         frame_count += 1
+        
+        # FPS Calculation
+        curr_time = time.time()
+        fps = 1 / (curr_time - prev_time) if (curr_time - prev_time) > 0 else 0
+        prev_time = curr_time
+        
+        # Update FPS display every few frames to avoid flickering
+        if frame_count % 5 == 0:
+            fps_placeholder.metric("Pipeline FPS", f"{fps:.1f}")
+            # logger.info(f"Current FPS: {fps:.1f}")
         
         if not cap.isOpened():
             st.warning("Video stream closed.")
@@ -53,22 +65,27 @@ def run_dashboard():
             # Loop video
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ret, frame = cap.read()
+            continue
         
         if ret:
             # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Run pipeline
-            annotated_frame, status = pipeline.process_frame(frame_rgb, frame_count)
+            # OPTIMIZATION: Resize to smaller width for processing (Logic Run)
+            h, w = frame_rgb.shape[:2]
+            aspect_ratio = h / w
+            process_h = int(PROCESSING_WIDTH * aspect_ratio)
+            frame_small = cv2.resize(frame_rgb, (PROCESSING_WIDTH, process_h))
             
-            # Resize frame: Increase width and height by 100px
-            h, w = annotated_frame.shape[:2]
-            new_w = w + 100
-            new_h = h + 100
-            annotated_frame = cv2.resize(annotated_frame, (new_w, new_h))
+            # Run pipeline on SMALL frame
+            annotated_frame_small, status, _ = pipeline.process_frame(frame_small, frame_count)
+            
+            # RESIZE BACK UP for Display (so user sees big video)
+            display_h = int(DISPLAY_WIDTH * aspect_ratio)
+            annotated_frame_large = cv2.resize(annotated_frame_small, (DISPLAY_WIDTH, display_h))
             
             # Update placeholder with new dimensions
-            video_placeholder.image(annotated_frame, channels="RGB", width=new_w)
+            video_placeholder.image(annotated_frame_large, channels="RGB", width=DISPLAY_WIDTH)
         
         # Update Log
         try:

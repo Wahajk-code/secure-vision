@@ -111,14 +111,30 @@ class SecureVisionPipeline:
                             if abandoned_timer % 30 == 0:
                                 self.stats_manager.log_event("ABANDONED_LUGGAGE", {"track_id": tid, "stream": self.stream_id})
                             
-                    # Add to dashboard data
-                    luggage_dashboard_data.append({
-                        "Luggage ID": tid,
-                        "Type": cls,
-                        "Owner": owner_info,
-                        "Status": lug_status,
-                        "Countdown": timer_display
-                    })
+            # Add to dashboard data (ALL objects)
+            obj_data = {
+                "id": tid,
+                "category": cls,
+                "status": "Normal",
+                "details": "Tracking"
+            }
+            
+            if cls in WEAPON_CLASSES:
+                obj_data["status"] = "CRITICAL"
+                obj_data["details"] = "Weapon Detected"
+                
+            elif cls in LUGGAGE_CLASSES:
+                obj_data["details"] = f"Owner: {owner_id if owner_id is not None else 'None'}"
+                if abandoned_timer > 0:
+                    frames_left = ABANDONED_DURATION_FRAMES - abandoned_timer
+                    if frames_left > 0:
+                        obj_data["details"] = f"⚠️ Abandoning in {frames_left / 30:.1f}s"
+                        obj_data["status"] = "WARNING"
+                    else:
+                        obj_data["status"] = "CRITICAL"
+                        obj_data["details"] = "🚨 ABANDONED"
+            
+            luggage_dashboard_data.append(obj_data)
 
             # Apply specific color if set (Weapon or Abandoned), else default
             box_color = current_color
