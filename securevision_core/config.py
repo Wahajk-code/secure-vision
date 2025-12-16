@@ -17,7 +17,7 @@ MODEL_PATH_LAYER3 = 'fight_classifier.pt'
 
 # Tracker Configuration
 TRACKER_TYPE = 'botsort.yaml' # Options: 'botsort.yaml', 'bytetrack.yaml'
-USE_CUDA = False # Set to True if NVIDIA GPU is available
+USE_CUDA = True # Set to True if NVIDIA GPU is available
 
 # Weapon Detection Classes
 # Standard YOLO classes or custom trained classes for weapons
@@ -27,6 +27,7 @@ LUGGAGE_CLASSES = ['backpack', 'handbag', 'suitcase']
 # Luggage Abandonment Logic
 ABANDONED_DURATION_FRAMES = 150  # 5 seconds at 30 FPS
 LUGGAGE_PROXIMITY_THRESHOLD = 200 # Pixels (approx 1-2 meters depending on depth)
+GHOST_FRAMES = 60 # Keep annotations for 2 seconds after track loss
 
 # Database Configuration
 DB_CONFIG = {

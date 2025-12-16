@@ -18,6 +18,12 @@ logger = setup_logger()
 # Global Flag for Graceful Shutdown
 running = True
 
+# Alert Throttling State
+# Dict[str, float] -> "LuggageID": timestamp
+sent_alerts = {}
+ALERT_COOLDOWN = 10.0 # Seconds before re-alerting for same luggage ID if it recurs
+
+
 def run_api():
     """Runs the FastAPI server."""
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
@@ -58,9 +64,12 @@ def main():
         if not ret:
             logger.info("Video ended. Looping...")
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            # Reset sent alerts on loop if desired, or keep them to avoid re-spamming on loop
+            # sent_alerts.clear() 
             continue
             
         frame_count += 1
+        start_time = time.time()
         
         # Validation / Processing
         # Convert to RGB for Pipeline
@@ -82,11 +91,18 @@ def main():
                 # item structure: {id, category, status, details}
                 if item.get("category") in LUGGAGE_CLASSES:
                     if "ABANDONED" in item.get("details", "") and item.get("status") == "CRITICAL":
-                         broadcast_log_sync({
-                             "type": "CRITICAL",
-                             "message": f"Abandoned Luggage {item['id']}! {item['details']}",
-                             "timestamp": time.strftime("%H:%M:%S")
-                         })
+                         lug_id = item['id']
+                         current_time = time.time()
+                         
+                         # Check throttling
+                         last_sent = sent_alerts.get(lug_id, 0)
+                         if current_time - last_sent > ALERT_COOLDOWN:
+                             broadcast_log_sync({
+                                 "type": "CRITICAL",
+                                 "message": f"Abandoned Luggage {item['id']}! {item['details']}",
+                                 "timestamp": time.strftime("%H:%M:%S")
+                             })
+                             sent_alerts[lug_id] = current_time
 
         if frame_count % 3 == 0: # Broadcast objects every 3rd frame to save bandwidth
              broadcast_log_sync({
@@ -95,9 +111,13 @@ def main():
                  "timestamp": time.strftime("%H:%M:%S")
              })
              
+        # Calculate Dynamic FPS
+        elapsed = time.time() - start_time
+        current_fps = 1.0 / elapsed if elapsed > 0 else 30.0
+
         if frame_count % 30 == 0:
              broadcast_log_sync({
-                 "fps": 30.0, # Mock FPS for now (Logic to calculate real FPS exists but using mock for consistent UI loop)
+                 "fps": round(current_fps, 1),
                  "log": {
                      "type": "INFO", 
                      "message": f"Pipeline Running - Frame {frame_count}",

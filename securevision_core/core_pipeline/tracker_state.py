@@ -10,6 +10,18 @@ class TrackerState:
         self.tracks = {}  # Dict[track_id, {'bbox': [], 'centroid': [], 'class': str}]
         self.history_len = history_len
         self.frame_count = 0
+        
+        # ID Mapping: BoTSORT ID (int) -> Persistent Person ID (int)
+        # This allows us to remap a new BoTSORT track to an old Person ID if ReID matches.
+        self.id_map = {} 
+
+    def get_mapped_id(self, botsort_id):
+        """Returns the persistent ID for a given BoTSORT ID, or the ID itself if no mapping exists."""
+        return self.id_map.get(botsort_id, botsort_id)
+    
+    def set_mapping(self, botsort_id, persistent_id):
+        """Maps a (likely new) BoTSORT ID to an existing Persistent ID."""
+        self.id_map[botsort_id] = persistent_id
 
     def assign_owners(self):
         """
@@ -18,7 +30,7 @@ class TrackerState:
         """
         from config import LUGGAGE_CLASSES, LUGGAGE_PROXIMITY_THRESHOLD
 
-        persons = []
+        persons = {} # Map Persistent ID to centroid
         luggage = []
 
         # Separate people and luggage
@@ -27,8 +39,11 @@ class TrackerState:
             if self.frame_count - track['last_seen'] > 10:
                 continue
 
+            # RESOLVE ID
+            effective_id = self.get_mapped_id(tid)
+
             if track['class'] == 'person':
-                persons.append((tid, track['centroid'][-1]))
+                persons[effective_id] = track['centroid'][-1]
             elif track['class'] in LUGGAGE_CLASSES:
                 luggage.append(tid)
 
@@ -41,29 +56,49 @@ class TrackerState:
                 lug_track['abandoned_timer'] = 0
             if 'owner_id' not in lug_track:
                 lug_track['owner_id'] = None
+            if 'is_abandoned_event_triggered' not in lug_track:
+                lug_track['is_abandoned_event_triggered'] = False
 
-            closest_person_id = None
-            min_dist = float('inf')
+            current_owner_id = lug_track['owner_id']
+            owner_nearby = False
 
-            # Find closest person
-            for pid, p_centroid in persons:
-                dist = np.linalg.norm(lug_centroid - np.array(p_centroid))
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_person_id = pid
-            
-            # Check threshold
-            if closest_person_id is not None and min_dist < LUGGAGE_PROXIMITY_THRESHOLD:
-                # Owner Found - Reset Timer
-                lug_track['owner_id'] = closest_person_id
+            # Valid Owner Check Strategy:
+            # 1. If we have an owner, ONLY check against that owner (using Persistent ID).
+            # 2. If we don't have an owner, find the closest person to assign.
+
+            if current_owner_id is not None:
+                # Check if specific owner is present and close
+                # current_owner_id is ALREADY a persistent ID (saved previously)
+                if current_owner_id in persons:
+                    owner_centroid = np.array(persons[current_owner_id])
+                    dist = np.linalg.norm(lug_centroid - owner_centroid)
+                    
+                    if dist < LUGGAGE_PROXIMITY_THRESHOLD:
+                        owner_nearby = True
+                
+                # Note: If owner is NOT in 'persons' (left the scene), owner_nearby remains False
+                
+            else:
+                # No owner assigned yet, try to find one
+                closest_person_id = None
+                min_dist = float('inf')
+
+                for pid, p_centroid in persons.items():
+                    dist = np.linalg.norm(lug_centroid - np.array(p_centroid))
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_person_id = pid
+                
+                if closest_person_id is not None and min_dist < LUGGAGE_PROXIMITY_THRESHOLD:
+                    lug_track['owner_id'] = closest_person_id # Assign new owner (Persistent ID)
+                    owner_nearby = True
+
+            if owner_nearby:
+                # Reset Timer
                 lug_track['abandoned_timer'] = 0
             else:
-                # No Owner Nearby or Owner Left - Increment Timer
-                # We assume assign_owners is called once per frame
+                # Owner away or unknown -> Increment Timer
                 lug_track['abandoned_timer'] += 1
-                # If timer exceeds threshold, we might keep the last owner_id or clear it?
-                # Let's keep the last owner_id if it existed, so we know who left it.
-                # lug_track['owner_id'] remains as is (last known owner) or None if never owned.
 
     def update(self, detections, frame_number):
         """
@@ -85,7 +120,8 @@ class TrackerState:
                     'bbox': deque(maxlen=self.history_len),
                     'centroid': deque(maxlen=self.history_len),
                     'class': det['class'],
-                    'last_seen': frame_number
+                    'last_seen': frame_number,
+                    'is_abandoned_event_triggered': False
                 }
             
             self.tracks[tid]['bbox'].append(det['bbox'])
@@ -100,3 +136,4 @@ class TrackerState:
 
     def get_all_tracks(self):
         return self.tracks
+

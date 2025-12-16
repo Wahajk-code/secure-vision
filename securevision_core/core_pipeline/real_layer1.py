@@ -61,7 +61,8 @@ def get_yolo_detections(frame, frame_number):
     # Run tracking
     # persist=True ensures track IDs are maintained across frames
     device = 0 if USE_CUDA else 'cpu'
-    results = model.track(frame, persist=True, tracker=TRACKER_TYPE, device=device, verbose=False, conf=0.1)
+    # Use half precision (fp16) if using CUDA for speedup
+    results = model.track(frame, persist=True, tracker=TRACKER_TYPE, device=device, verbose=False, conf=0.1, half=USE_CUDA)
     
     if not results:
         return detections
