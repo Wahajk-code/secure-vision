@@ -86,6 +86,64 @@ export const DashboardLayout = () => {
        { id: 1024, event: 'SYSTEM_START', time: new Date().toLocaleTimeString(), loc: 'Server', status: 'RESOLVED' }
   ]);
   
+  // Fetch Historical Events on Mount
+  useEffect(() => {
+      const fetchStats = async () => {
+          console.log("[Analytics] Fetching historical stats from DB...");
+          try {
+              const res = await fetch('http://localhost:8001/api/stats');
+              if (res.ok) {
+                  const data = await res.json();
+                  console.log("[Analytics] Received stats payload:", data);
+                  if (data.events && data.events.length > 0) {
+                      console.log(`[Analytics] Found ${data.events.length} events processing into timeline...`);
+                      const formatted = data.events.map((e: any) => ({
+                          id: Math.floor(Math.random() * 100000), // Simple ID for react keys
+                          event: e.type,
+                          time: new Date(e.datetime).toLocaleTimeString(),
+                          loc: `Stream: ${e.stream_id}`,
+                          status: 'RESOLVED'
+                      }));
+                      setEvents(prev => [...formatted, ...prev].slice(0, 100)); // Keep latest 100
+                      
+                      // Pre-populate Chart Data
+                      setChartData(prev => {
+                          const newChart = [...prev];
+                          data.events.forEach((evt: any) => {
+                              // We only have 7 bins in the chart. For simplicity, just add them to the latest bin 
+                              // or distribute them if they occurred within the last 30 minutes.
+                              const evtTime = new Date(evt.datetime);
+                              const now = new Date();
+                              const diffMinutes = (now.getTime() - evtTime.getTime()) / 60000;
+                              
+                              if (diffMinutes < 35) {
+                                  // Find which of the 7 (5-min) bins this belongs to. Index 6 is "now", Index 0 is "-30m"
+                                  const binIndex = 6 - Math.floor(diffMinutes / 5);
+                                  if (binIndex >= 0 && binIndex <= 6) {
+                                      const pt = { ...newChart[binIndex] };
+                                      if (evt.type === 'WEAPON') pt.weapons += 1;
+                                      if (evt.type === 'FIGHT') pt.fights += 1;
+                                      if (evt.type === 'ABANDONED_LUGGAGE') pt.luggage += 1;
+                                      newChart[binIndex] = pt;
+                                  }
+                              }
+                          });
+                          console.log("[Analytics] Chart pre-population complete:", newChart);
+                          return newChart;
+                      });
+                  } else {
+                      console.log("[Analytics] Payload received, but 'events' array was empty or undefined.");
+                  }
+              } else {
+                 console.error(`[Analytics] HTTP Error fetching stats: ${res.status}`);
+              }
+          } catch (e) {
+              console.error("[Analytics] Failed to fetch historical stats! Network error or backend down:", e);
+          }
+      };
+      fetchStats();
+  }, []);
+  
   const [ws, setWs] = useState<WebSocket | null>(null);
 
   // Toast Helper

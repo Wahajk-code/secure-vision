@@ -11,9 +11,10 @@ import sys
 import queue
 
 from api.main import app, broadcast_log_sync
-from config import VIDEO_PATH, PROCESSING_WIDTH, LUGGAGE_CLASSES
+from config import VIDEO_PATH, PROCESSING_WIDTH, LUGGAGE_CLASSES, WEAPON_CLASSES
 from core_pipeline.pipeline import SecureVisionPipeline
 from utils.logger import setup_logger
+from utils.cloudinary_helper import upload_image_async
 
 # Setup Logger
 logger = setup_logger()
@@ -88,14 +89,14 @@ def main():
     api_thread.start()
     logger.info("FastAPI Server started on http://localhost:8000")
 
-    # 2. Add delay to let API start
-    time.sleep(2)
-
     # 3. Start Video Pipeline (Main Thread)
     playlist = [
+        os.path.join(os.path.dirname(__file__), 'testvideos', 'gunmantest3.mp4'),
         os.path.join(os.path.dirname(__file__), 'testvideos', 'test6.mp4'),
-        os.path.join(os.path.dirname(__file__), 'testvideos', 'test-ismaeel2.mp4'),
-        os.path.join(os.path.dirname(__file__), 'testvideos', 'livefight-test3.mp4')
+        os.path.join(os.path.dirname(__file__), 'testvideos', 'fight1final.mp4'),
+        os.path.join(os.path.dirname(__file__), 'testvideos', 'fight2final.mp4'),
+        os.path.join(os.path.dirname(__file__), 'testvideos', 'luggage1final.mp4'),
+        os.path.join(os.path.dirname(__file__), 'testvideos', 'luggage2final.mp4')
     ]
     
     # 3. Start Async Video Reader Thread
@@ -134,8 +135,14 @@ def main():
         process_h = int(PROCESSING_WIDTH * aspect_ratio)
         frame_small = cv2.resize(frame_rgb, (PROCESSING_WIDTH, process_h))
         
+        # Cloudinary Callback
+        def on_critical_capture(frame_to_upload, description):
+            # Send current time for metadata
+            timestamp = time.strftime("%H:%M:%S")
+            upload_image_async(frame_to_upload, description, timestamp)
+            
         # Run Heavy Pipeline
-        annotated_frame, status, log_data = pipeline.process_frame(frame_small, frame_count)
+        annotated_frame, status, log_data = pipeline.process_frame(frame_small, frame_count, capture_callback=on_critical_capture)
         
         # Broadcast Logs to API/Frontend
         if log_data:
@@ -156,6 +163,30 @@ def main():
                                  "timestamp": time.strftime("%H:%M:%S")
                              })
                              sent_alerts[lug_id] = current_time
+                             
+                # Check for Weapon Alert
+                elif item.get("category") in WEAPON_CLASSES and item.get("status") == "CRITICAL":
+                     obj_id = f"w_{item['id']}"
+                     current_time = time.time()
+                     if current_time - sent_alerts.get(obj_id, 0) > ALERT_COOLDOWN:
+                         broadcast_log_sync({
+                             "type": "CRITICAL",
+                             "message": f"WEAPON DETECTED! ({item['category'].upper()})",
+                             "timestamp": time.strftime("%H:%M:%S")
+                         })
+                         sent_alerts[obj_id] = current_time
+                
+                # Check for Fight Alert         
+                elif item.get("category") == "person" and item.get("status") == "CRITICAL" and "FIGHTING" in item.get("details", ""):
+                     obj_id = f"f_{item['id']}"
+                     current_time = time.time()
+                     if current_time - sent_alerts.get(obj_id, 0) > ALERT_COOLDOWN:
+                         broadcast_log_sync({
+                             "type": "CRITICAL",
+                             "message": f"FIGHT DETECTED! (ID: {item['id']})",
+                             "timestamp": time.strftime("%H:%M:%S")
+                         })
+                         sent_alerts[obj_id] = current_time
 
         if frame_count % 3 == 0: # Broadcast objects every 3rd frame to save bandwidth
              broadcast_log_sync({
@@ -181,7 +212,7 @@ def main():
         # Display Native Window
         # Convert back to BGR for OpenCV imshow
         frame_bgr_out = cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR)
-        cv2.imshow("SecureVision - Live Feed (BotSORT Enabled)", frame_bgr_out)
+        cv2.imshow("SecureVision", frame_bgr_out)
         
         # Yield GIL to allow API thread to run
         time.sleep(0.005)

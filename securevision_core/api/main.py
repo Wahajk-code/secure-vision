@@ -20,6 +20,7 @@ from utils.logger import setup_logger
 from api import auth, users
 from database import engine
 from models_db import Base
+from utils.stats_manager import StatsManager
 
 # Create Tables
 Base.metadata.create_all(bind=engine)
@@ -153,4 +154,11 @@ async def broadcaster():
 async def startup_event():
     asyncio.create_task(broadcaster())
 
-
+@app.get("/api/stats")
+def get_historical_stats():
+    """
+    Returns historical security events from the PostgreSQL database
+    for the React Analytics Dashboard.
+    """
+    manager = StatsManager()
+    return manager.get_stats()

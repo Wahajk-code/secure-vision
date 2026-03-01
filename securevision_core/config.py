@@ -16,7 +16,7 @@ PROXIMITY_THRESHOLD_METERS = 1.0  # Meters
 SUSTAINED_DURATION_FRAMES = 60    # ~2 seconds at 30 FPS
 
 # Model Paths (Mock & Real)
-MODEL_BASE = 'weapon_detection2.pt'
+MODEL_BASE = 'yolo11n.pt'
 MODEL_WEAPONS = 'weapon_detection4.pt'
 MODEL_PATH_LAYER3 = 'fight_classifier.pt'
 
@@ -36,7 +36,7 @@ LUGGAGE_CLASSES = ['backpack', 'handbag', 'suitcase']
 CONFIDENCE_THRESHOLDS = {
     'Gun': 0.40,      # Increased to reduce false positives
     'gun': 0.40,
-    'knife': 0.05,    # High sensitivity for knives
+    'knife': 0.30,    # High sensitivity for knives
     'rifle': 0.40,    # Increased to reduce false positives
     'backpack': 0.10, # Lowered threshold for consistent bag detection
     'handbag': 0.10,
@@ -44,6 +44,11 @@ CONFIDENCE_THRESHOLDS = {
     'person': 0.35    # Standard sensitivity for people
 }
 MIN_CONFIDENCE = 0.15 # The baseline threshold passed to YOLO
+
+# Weapon Size Constraint
+MAX_WEAPON_BBOX_AREA_RATIO = 0.3 # Max 30% of the screen. Rifles shouldn't be bigger than a person.
+MAX_WEAPON_BBOX_HEIGHT_RATIO = 0.55 # Max 55% of the screen height.
+MAX_WEAPON_BBOX_WIDTH_RATIO = 0.55 # Max 55% of the screen width.
 
 # Luggage Abandonment Logic
 ABANDONED_DURATION_FRAMES = 150  # 5 seconds at 30 FPS

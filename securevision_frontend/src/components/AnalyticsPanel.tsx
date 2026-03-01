@@ -18,7 +18,12 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ data }) => {
     const totalWeapons = data.reduce((acc, curr) => acc + curr.weapons, 0);
     const totalFights = data.reduce((acc, curr) => acc + curr.fights, 0);
     const totalLuggage = data.reduce((acc, curr) => acc + curr.luggage, 0);
-    const riskLevel = totalWeapons > 0 ? 'CRITICAL' : (totalFights > 0 || totalLuggage > 2) ? 'HIGH' : 'LOW';
+    let riskLevel = 'LOW';
+    if (totalWeapons > 3 || totalFights > 3 || totalLuggage >= 10) {
+        riskLevel = 'HIGH';
+    } else if (totalWeapons > 0 || totalFights > 0) {
+        riskLevel = 'MEDIUM';
+    }
 
     return (
         <div className="h-full flex flex-col gap-4 overflow-y-auto pr-2 custom-scrollbar">
@@ -28,8 +33,8 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ data }) => {
                 <StatCard 
                     label="Threat Level" 
                     value={riskLevel} 
-                    icon={<AlertTriangle className={riskLevel === 'CRITICAL' ? 'text-red-400' : 'text-orange-400'} />}
-                    color={riskLevel === 'CRITICAL' ? 'red' : 'orange'}
+                    icon={<AlertTriangle className={riskLevel === 'HIGH' ? 'text-red-400' : riskLevel === 'MEDIUM' ? 'text-orange-400' : 'text-green-400'} />}
+                    color={riskLevel === 'HIGH' ? 'red' : riskLevel === 'MEDIUM' ? 'orange' : 'green'}
                 />
                 <StatCard 
                     label="Weapons" 

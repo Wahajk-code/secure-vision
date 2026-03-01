@@ -11,17 +11,23 @@ class PoseKeypointFilter:
     A lightweight filter that runs a Pose Estimation model (YOLOv8-Pose) 
     on specific regions of interest (ROI) to detect high-velocity arm movements.
     """
-    def __init__(self, model_name='yolov8m-pose.pt'):
+    def __init__(self, model_name='models/pose26n.pt'):
         self.model = None
         if YOLO:
             # We assume the model will be downloaded automatically by Ultralytics
-            # or exists in the cache. 'yolov8m-pose.pt' is the Medium version (better accuracy).
+            # or exists in the cache. 'yolo11n-pose.pt' is the newer NMS-free version.
+            import os
+            
+            # Resolve correct path relative to this script
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            model_path = os.path.join(base_dir, 'models', 'pose26n.pt')
+            
             try:
-                self.model = YOLO(model_name).to('cuda')
+                self.model = YOLO(model_path).to('cuda')
             except Exception as e:
-                print(f"[Warning] Could not load Pose Model to CUDA: {e}. Trying fallback 'yolov8n-pose.pt'")
+                print(f"[Warning] Could not load Pose Model to CUDA: {e}. Trying fallback 'yolo11n-pose.pt'")
                 try:
-                    self.model = YOLO('yolov8n-pose.pt')
+                    self.model = YOLO('yolo11n-pose.pt')
                 except:
                      print("[Error] Failed to load any Pose model.")
         

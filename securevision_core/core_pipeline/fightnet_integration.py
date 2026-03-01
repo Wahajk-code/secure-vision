@@ -207,4 +207,5 @@ def run_fightnet(pose_buffer):
         prob = torch.sigmoid(out).item()
         
     # from config we see best_threshold is likely around 0.35 to 0.5
-    return prob > 0.40
+    # UPDATE: Increased to 0.80 to prevent low-velocity handshakes from triggering CONFIRMED
+    return prob > 0.80

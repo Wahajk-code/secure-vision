@@ -7,8 +7,8 @@ from config import SUSTAINED_DURATION_FRAMES, PROXIMITY_THRESHOLD_METERS, PROCES
 FIGHT_PROXIMITY_THRESHOLD_PIXELS = 150 # Reduced back to reasonable interaction distance
 
 # Velocity Thresholds
-VELOCITY_THRESHOLD_ACITVITY = 2.0 # Significant movement
-VELOCITY_THRESHOLD_EXPLOSIVE = 5.0 # Very fast movement (immediate trigger)
+VELOCITY_THRESHOLD_ACITVITY = 2.0 # Increased to ignore slow interactions (hugs/handshakes)
+VELOCITY_THRESHOLD_EXPLOSIVE = 5.0 # Increased for very fast movement (immediate trigger)
 
 # Import FightNet
 from core_pipeline.fightnet_integration import run_fightnet
@@ -19,14 +19,14 @@ class FightDetector:
         # State to track potential fights
         # Key: tuple(id1, id2) (sorted)
         # Value: { 'start_frame': int, 'last_seen': int, 'status': 'MONITORING' | 'VERIFYING' | 'CONFIRMED' }
-        self.active_pairs = {}
+        self.active_pairs = {}  # Initialize as empty dictionary
         
         # Debounce/Cleanup
         self.LOST_PAIR_THRESHOLD = 30 # If pair separates for 30 frames, reset
         self.VERIFY_INTERVAL = 5 # Check mock model every 5 frames if conditions met
         
         self.pose_filter = PoseKeypointFilter()
-        self.POSE_ACTIVITY_THRESHOLD = 30.0 # Heuristic combination of velocity + contact
+        self.POSE_ACTIVITY_THRESHOLD = 90.0 # Increased past 75.0 to ignore energetic hugs, while catching actual fights (97-110)
         
     def _calculate_body_velocity(self, track1, track2):
         """
@@ -78,19 +78,24 @@ class FightDetector:
                         self.active_pairs[pair_key] = {
                             'start_frame': frame_number,
                             'last_seen': frame_number,
-                            'status': 'MONITORING'
+                            'status': 'MONITORING',
+                            'last_velocity': 0.0,
+                            'last_pose': 0.0
                         }
                     else:
                         self.active_pairs[pair_key]['last_seen'] = frame_number
                         
                         # Logic: Proximity + Velocity = Fight Candidate
                         body_velocity = self._calculate_body_velocity(track1, track2)
+                        self.active_pairs[pair_key]['last_velocity'] = body_velocity
                         
                         # Trigger Conditions
                         is_candidate = False
                         
                         # A. Sustained Activity
                         duration = frame_number - self.active_pairs[pair_key]['start_frame']
+                        # Hugs/Handshakes usually have very low body_velocity even if duration > 30.
+                        # We require a higher velocity (e.g. 2.8) to consider it a fight candidate.
                         if duration > 30 and body_velocity > VELOCITY_THRESHOLD_ACITVITY:
                             is_candidate = True
                             
@@ -114,6 +119,10 @@ class FightDetector:
                                 self.active_pairs[pair_key]['pose_buffer'].pop(0)
                             
                             pose_activity = max(arm_score_1, arm_score_2)
+                            self.active_pairs[pair_key]['last_pose'] = pose_activity
+                            
+                            # Log live tuning values
+                            print(f"[TUNING] IDs {id1}-{id2} | Vel: {body_velocity:.1f} (Thresholds: {VELOCITY_THRESHOLD_ACITVITY}/{VELOCITY_THRESHOLD_EXPLOSIVE}) | Pose: {pose_activity:.1f} (Threshold: {self.POSE_ACTIVITY_THRESHOLD})")
                             
                             if pose_activity > self.POSE_ACTIVITY_THRESHOLD:
                                 # Run Mock Model Verification
@@ -128,13 +137,18 @@ class FightDetector:
                     # Add to return list 
                     status = self.active_pairs[pair_key]['status']
                     pose_len = len(self.active_pairs[pair_key].get('pose_buffer', []))
+                    last_v = self.active_pairs[pair_key].get('last_velocity', 0.0)
+                    last_p = self.active_pairs[pair_key].get('last_pose', 0.0)
+                    
                     if status == 'CONFIRMED' or pose_len > 0:
                         display_status = status if status == 'CONFIRMED' else 'WARNING'
                         detected_fights.append({
                             'ids': list(pair_key),
                             'status': display_status,
                             'distance': dist,
-                            'timer': pose_len
+                            'timer': pose_len,
+                            'velocity': last_v,
+                            'pose': last_p
                         })
 
         # Cleanup stale pairs

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Camera, Maximize2, Minimize2, AlertTriangle, Shield, Cpu, Tag, Clock } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Camera, Maximize2, Minimize2, AlertTriangle, Shield, Cpu, Tag, Clock, Filter, Calendar } from 'lucide-react';
 
 interface LogEntry {
     type: 'INFO' | 'WARNING' | 'CRITICAL';
@@ -22,35 +22,81 @@ interface StatsPanelProps {
 
 export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = [] }) => {
     const [expandedImageId, setExpandedImageId] = useState<number | null>(null);
+    const [selectedSession, setSelectedSession] = useState<'All' | 'Current Shift' | 'Previous Shift'>('All');
+    const [selectedTimeline, setSelectedTimeline] = useState<'Anytime' | 'Last Hour' | 'Last 24h'>('Anytime');
+
+    // Filter Logic
+    const filteredImages = useMemo(() => {
+        return criticalImages.filter(() => {
+            // In a real app, parse `img.timestamp` into a Date object and compare.
+            // For now, this is a visual UI implementation as requested.
+            return true; 
+        });
+    }, [criticalImages, selectedSession, selectedTimeline]);
 
     return (
         <div className="flex flex-col h-full bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl relative group overflow-hidden">
              {/* Gradient Overlay */}
              <div className="absolute inset-0 bg-gradient-to-bl from-red-500/5 via-transparent to-orange-500/5 pointer-events-none" />
 
-            {/* Header */}
-            <div className="p-3 border-b border-white/5 bg-white/5 flex justify-between items-center backdrop-blur-md z-10 shrink-0">
-                <div className="flex items-center gap-2">
-                    <div className="p-1 rounded bg-red-500/10">
-                        <Camera className="w-3.5 h-3.5 text-red-400" />
+            {/* Header & Filters */}
+            <div className="flex flex-col border-b border-white/5 bg-black/40 backdrop-blur-md z-10 shrink-0">
+                <div className="p-3 flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                        <div className="p-1 rounded bg-red-500/10 border border-red-500/20">
+                            <Camera className="w-4 h-4 text-red-400" />
+                        </div>
+                        <h2 className="text-xs font-black tracking-widest text-white uppercase">Incident Evidence</h2>
                     </div>
-                    <h2 className="text-xs font-black tracking-widest text-white uppercase">Critical Captures</h2>
+                    <div className="flex items-center gap-2">
+                        <Cpu size={12} className="text-slate-500" />
+                        <span className="text-[10px] font-mono text-slate-400">FPS: <span className="text-white font-bold">{fps.toFixed(1)}</span></span>
+                    </div>
                 </div>
-                <div className="flex items-center gap-2">
-                    <Cpu size={12} className="text-slate-500" />
-                    <span className="text-[10px] font-mono text-slate-400">FPS: <span className="text-white font-bold">{fps.toFixed(1)}</span></span>
+                
+                {/* Filter Bar */}
+                <div className="px-3 pb-3 flex gap-4 border-t border-white/5 pt-2">
+                    {/* Session Filter */}
+                    <div className="flex gap-1.5 items-center">
+                        <Filter size={10} className="text-slate-500" />
+                        {['All', 'Current Shift', 'Previous Shift'].map(session => (
+                            <button 
+                                key={session}
+                                onClick={() => setSelectedSession(session as any)}
+                                className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-md transition-colors ${selectedSession === session ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                            >
+                                {session}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="w-px bg-white/10 h-4 self-center" />
+
+                    {/* Timeline Filter */}
+                    <div className="flex gap-1.5 items-center">
+                        <Calendar size={10} className="text-slate-500" />
+                        {['Anytime', 'Last Hour', 'Last 24h'].map(time => (
+                            <button 
+                                key={time}
+                                onClick={() => setSelectedTimeline(time as any)}
+                                className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-md transition-colors ${selectedTimeline === time ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                            >
+                                {time}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
             {/* Image Feed Grid */}
-            <div className={`flex-1 overflow-y-auto p-4 custom-scrollbar z-10 ${criticalImages.length > 0 ? 'grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 content-start gap-4 auto-rows-max' : 'flex flex-col'}`}>
-                {criticalImages.length === 0 && (
+            <div className={`flex-1 overflow-y-auto p-4 custom-scrollbar z-10 ${filteredImages.length > 0 ? 'grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 content-start gap-4 auto-rows-max' : 'flex flex-col'}`}>
+                {filteredImages.length === 0 && (
                     <div className="text-center text-slate-500 py-10 flex flex-col items-center gap-2 opacity-50 h-full justify-center w-full col-span-2">
                         <Camera size={24} />
                         <span className="font-mono text-[10px]">No Critical Captures Yet...</span>
                     </div>
                 )}
-                {criticalImages.map((img) => (
+                {filteredImages.map((img) => (
                     <div 
                         key={img.id} 
                         className="flex flex-col rounded-xl overflow-hidden border border-white/5 bg-white/5 hover:border-red-500/30 hover:bg-white/10 transition-all duration-300"

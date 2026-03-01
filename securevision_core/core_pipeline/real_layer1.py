@@ -61,7 +61,7 @@ def get_yolo_detections(frame, frame_number):
     if models is None:
         return detections
     
-    from config import WEAPON_CLASSES, BASE_CLASSES, TRACKER_TYPE, USE_CUDA, CONFIDENCE_THRESHOLDS, MIN_CONFIDENCE
+    from config import WEAPON_CLASSES, BASE_CLASSES, TRACKER_TYPE, USE_CUDA, CONFIDENCE_THRESHOLDS, MIN_CONFIDENCE, MAX_WEAPON_BBOX_AREA_RATIO, MAX_WEAPON_BBOX_HEIGHT_RATIO, MAX_WEAPON_BBOX_WIDTH_RATIO
     
     device = 0 if USE_CUDA else 'cpu'
 
@@ -97,6 +97,21 @@ def get_yolo_detections(frame, frame_number):
                 req_conf = CONFIDENCE_THRESHOLDS.get(cls_name, 0.4)
                 if conf < req_conf:
                     continue
+                    
+                # Apply size constraint for weapons to filter out person-sized false positives
+                if cls_name in WEAPON_CLASSES:
+                    frame_h, frame_w = frame.shape[:2]
+                    frame_area = frame_w * frame_h
+                    box_w = x2 - x1
+                    box_h = y2 - y1
+                    box_area = box_w * box_h
+                    ratio = box_area / frame_area
+                    h_ratio = box_h / frame_h
+                    w_ratio = box_w / frame_w
+                    
+                    if ratio > MAX_WEAPON_BBOX_AREA_RATIO or h_ratio > MAX_WEAPON_BBOX_HEIGHT_RATIO or w_ratio > MAX_WEAPON_BBOX_WIDTH_RATIO:
+                        logger.warning(f"[Size Filter] Ignoring massive {cls_name}. Area: {ratio:.2f} (H: {h_ratio:.2f}, W: {w_ratio:.2f})")
+                        continue # Bbox is too large to be a valid weapon
                 
                 # Track ID might be None if just detected and not tracked yet? 
                 track_id = int(box.id[0].item()) if box.id is not None else -1
