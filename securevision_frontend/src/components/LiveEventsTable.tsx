@@ -57,7 +57,7 @@ export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects }) => 
                             </tr>
                         </thead>
                         <tbody className="text-xs font-medium">
-                            {objects.map((obj) => (
+                            {objects.filter(o => o.status !== 'Normal').map((obj) => (
                                 <tr key={obj.id} className="border-b border-white/5 hover:bg-orange-500/10 transition-colors group">
                                     <td className="py-2.5 pl-4 font-mono text-slate-400 group-hover:text-orange-200 transition-colors">
                                         <span className="opacity-50">#</span>{obj.id}
@@ -65,9 +65,9 @@ export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects }) => 
                                     
                                     <td className="py-2.5">
                                         <div className="flex items-center gap-2">
-                                            {obj.category.includes('person') && <User size={12} className="text-blue-400" />}
-                                            {obj.category.includes('suitcase') && <Package size={12} className="text-yellow-400" />}
-                                            {['gun', 'knife', 'bat'].some(w => obj.category.includes(w)) && <AlertTriangle size={12} className="text-red-400 animate-pulse" />}
+                                            {obj.category.toLowerCase().includes('person') && <User size={12} className="text-blue-400" />}
+                                            {obj.category.toLowerCase().includes('suitcase') && <Package size={12} className="text-yellow-400" />}
+                                            {['gun', 'knife', 'bat', 'rifle'].some(w => obj.category.toLowerCase().includes(w)) && <AlertTriangle size={12} className="text-red-400 animate-pulse" />}
                                             <span className="capitalize text-slate-200">{obj.category}</span>
                                         </div>
                                     </td>

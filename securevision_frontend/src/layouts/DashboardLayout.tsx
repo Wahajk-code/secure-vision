@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from '../components/Sidebar';
 import { StatsPanel } from '../components/StatsPanel';
+import type { CriticalImage } from '../components/StatsPanel';
 import { AnalyticsPanel } from '../components/AnalyticsPanel';
 import { DatabaseView } from '../components/DatabaseView';
 import type { DBEvent } from '../components/DatabaseView';
@@ -8,7 +9,7 @@ import { LiveEventsTable } from '../components/LiveEventsTable';
 import type { LiveObject } from '../components/LiveEventsTable';
 import { ToastContainer } from '../components/Toast';
 import type { ToastMessage } from '../components/Toast';
-import { Bell, Search, User, LogOut } from 'lucide-react';
+import { Bell, User, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -30,9 +31,9 @@ export const DashboardLayout = () => {
   const navigate = useNavigate();
   
   // Navigation State
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'analytics'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analytics' | 'screenshots'>('dashboard');
 
-  const handleTabSwitch = (tab: 'dashboard' | 'analytics' | 'settings') => {
+  const handleTabSwitch = (tab: 'dashboard' | 'analytics' | 'settings' | 'screenshots') => {
       if (tab === 'settings') {
           navigate('/settings');
       } else {
@@ -50,6 +51,7 @@ export const DashboardLayout = () => {
   // Notification State
   const [notifications, setNotifications] = useState<LogEntry[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [criticalImages, setCriticalImages] = useState<CriticalImage[]>([]);
   
   // Charts & DB State (Analytics Tab)
   const [chartData, setChartData] = useState<ChartDataPoint[]>(() => {
@@ -156,6 +158,17 @@ export const DashboardLayout = () => {
                      setNotifications(prev => [logEntry, ...prev].slice(0, 10));
                  }
                  
+                 // 4. Critical Images Structure
+                 if (data.type === 'CRITICAL_IMAGE') {
+                     const imageEntry: CriticalImage = {
+                         id: Date.now(),
+                         url: data.image_url,
+                         description: data.message,
+                         timestamp: data.timestamp
+                     };
+                     setCriticalImages(prev => [imageEntry, ...prev].slice(0, 10)); // Keep last 10
+                 }
+                 
             } catch (e) {
                 console.error("WS Parse Error", e);
             }
@@ -173,10 +186,9 @@ export const DashboardLayout = () => {
       const time = new Date().toLocaleTimeString();
       let eventType = 'UNKNOWN';
       let title = 'Alert';
-      
-      if (log.message.includes('Weapon')) { eventType = 'WEAPON_DETECTED'; title = 'Weapon Detected'; }
-      else if (log.message.includes('Fight')) { eventType = 'FIGHT_DETECTED'; title = 'Fight Active'; }
-      else if (log.message.includes('Abandoned')) { eventType = 'LUGGAGE_ABANDONED'; title = 'Abandoned Object'; }
+      if (log.message.toUpperCase().includes('WEAPON')) { eventType = 'WEAPON_DETECTED'; title = 'Weapon Detected'; }
+      else if (log.message.toUpperCase().includes('FIGHT')) { eventType = 'FIGHT_DETECTED'; title = 'Fight Active'; }
+      else if (log.message.toUpperCase().includes('ABANDONED')) { eventType = 'LUGGAGE_ABANDONED'; title = 'Abandoned Object'; }
       
       if (eventType !== 'UNKNOWN') {
            addToast('error', title, log.message);
@@ -230,10 +242,10 @@ export const DashboardLayout = () => {
         <div className="relative z-50 flex justify-between items-center shrink-0 py-2 border-b border-white/5 bg-black/20 backdrop-blur-md rounded-b-2xl px-6">
             <div className="flex flex-col">
                 <h2 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-orange-100 to-orange-200 tracking-tighter drop-shadow-sm">
-                    {activeTab === 'dashboard' ? 'LIVE COMMAND' : 'ANALYTICS CORE'}
+                    {activeTab === 'dashboard' ? 'LIVE COMMAND' : activeTab === 'analytics' ? 'ANALYTICS CORE' : 'CRITICAL EVIDENCE'}
                 </h2>
                 <p className="text-[10px] text-orange-400/80 font-bold uppercase tracking-[0.2em]">
-                    {activeTab === 'dashboard' ? 'Real-time Surveillance Grid' : 'Historical Threat Analysis'}
+                    {activeTab === 'dashboard' ? 'Real-time Surveillance Grid' : activeTab === 'analytics' ? 'Historical Threat Analysis' : 'Captured Incident Imagery'}
                 </p>
             </div>
             
@@ -308,8 +320,14 @@ export const DashboardLayout = () => {
                     </div>
                     
                     {/* Right: Stats Panel */}
-                    <div className="bg-black/20 border border-white/5 rounded-3xl backdrop-blur-sm overflow-hidden shadow-2xl p-1">
-                            <StatsPanel logs={logs} fps={fps} />
+                    <div className="bg-black/20 border border-white/5 rounded-3xl backdrop-blur-sm overflow-hidden shadow-2xl p-1 flex flex-col">
+                            <StatsPanel logs={logs} fps={fps} criticalImages={criticalImages} />
+                    </div>
+                </div>
+            ) : activeTab === 'screenshots' ? (
+                <div className="flex-1 w-full h-full p-4 overflow-hidden">
+                    <div className="bg-black/20 border border-white/5 rounded-3xl backdrop-blur-sm overflow-hidden shadow-2xl p-1 flex flex-col h-full w-full">
+                         <StatsPanel logs={logs} fps={fps} criticalImages={criticalImages} />
                     </div>
                 </div>
             ) : (

@@ -1,10 +1,10 @@
 
 import React from 'react';
-import { LayoutDashboard, Settings, ShieldCheck, Activity } from 'lucide-react';
+import { LayoutDashboard, Settings, Activity, Camera } from 'lucide-react';
 
 interface SidebarProps {
-    activeTab: 'dashboard' | 'analytics' | 'settings';
-    onSwitch: (tab: 'dashboard' | 'analytics' | 'settings') => void;
+    activeTab: 'dashboard' | 'analytics' | 'settings' | 'screenshots';
+    onSwitch: (tab: 'dashboard' | 'analytics' | 'settings' | 'screenshots') => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSwitch }) => {
@@ -36,6 +36,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSwitch }) => {
                     label="Analytics Core" 
                     active={activeTab === 'analytics'} 
                     onClick={() => onSwitch('analytics')}
+                />
+                <NavItem 
+                    icon={<Camera />} 
+                    label="Critical Captures" 
+                    active={activeTab === 'screenshots'} 
+                    onClick={() => onSwitch('screenshots')}
                 />
             </nav>
 
