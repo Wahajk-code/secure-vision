@@ -7,6 +7,9 @@ import asyncio
 import os
 import signal
 import sys
+import sys
+import queue
+
 from api.main import app, broadcast_log_sync
 from config import VIDEO_PATH, PROCESSING_WIDTH, LUGGAGE_CLASSES
 from core_pipeline.pipeline import SecureVisionPipeline
@@ -17,6 +20,47 @@ logger = setup_logger()
 
 # Global Flag for Graceful Shutdown
 running = True
+
+class VideoReaderThread(threading.Thread):
+    """
+    Dedicated thread for continuously reading video frames from disk/stream into an in-memory queue.
+    This hides the I/O and MP4 decoding latency from the heavy AI processing loop.
+    """
+    def __init__(self, playlist, queue_size=60):
+        super().__init__(daemon=True)
+        self.playlist = playlist
+        self.frame_queue = queue.Queue(maxsize=queue_size)
+        self.current_idx = 0
+        self.cap = cv2.VideoCapture(self.playlist[self.current_idx])
+        self._is_running = True
+
+    def run(self):
+        logger.info(f"[VideoReader] Starting background decoding. Source: {os.path.basename(self.playlist[self.current_idx])}")
+        while self._is_running:
+            if not self.cap.isOpened():
+                break
+            
+            ret, frame = self.cap.read()
+            if not ret:
+                # Video Ended. Advance playlist.
+                self.current_idx = (self.current_idx + 1) % len(self.playlist)
+                next_video = os.path.basename(self.playlist[self.current_idx])
+                logger.info(f"[VideoReader] Video ended. Moving to next video in playlist: {next_video}")
+                self.cap.release()
+                
+                # Signal the AI thread perfectly in sync with the frame offset that the context has changed
+                self.frame_queue.put(("VIDEO_RESET", None))
+                self.cap = cv2.VideoCapture(self.playlist[self.current_idx])
+                continue
+                
+            # Block if Queue is full, preventing RAM overflow while still staying 60 frames ahead of the AI
+            self.frame_queue.put(("FRAME", frame))
+
+    def stop(self):
+        self._is_running = False
+        if self.cap.isOpened():
+             self.cap.release()
+
 
 # Alert Throttling State
 # Dict[str, float] -> "LuggageID": timestamp
@@ -48,24 +92,33 @@ def main():
     time.sleep(2)
 
     # 3. Start Video Pipeline (Main Thread)
-    if not os.path.exists(VIDEO_PATH):
-        logger.error(f"Video file not found: {VIDEO_PATH}")
-        return
+    playlist = [
+        os.path.join(os.path.dirname(__file__), 'testvideos', 'test6.mp4'),
+        os.path.join(os.path.dirname(__file__), 'testvideos', 'test-ismaeel2.mp4'),
+        os.path.join(os.path.dirname(__file__), 'testvideos', 'livefight-test3.mp4')
+    ]
+    
+    # 3. Start Async Video Reader Thread
+    video_reader = VideoReaderThread(playlist, queue_size=60)
+    video_reader.start()
 
-    cap = cv2.VideoCapture(VIDEO_PATH)
     pipeline = SecureVisionPipeline(stream_id="desktop_stream")
     frame_count = 0
     
-    logger.info(f"Opening Native Video Window for: {os.path.basename(VIDEO_PATH)}")
+    logger.info("Opening Native Video Window for playlist. Waiting for AI loop to spin up...")
     logger.info("Press 'Q' in the video window to quit.")
 
-    while running and cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            logger.info("Video ended. Looping...")
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            # Reset sent alerts on loop if desired, or keep them to avoid re-spamming on loop
-            # sent_alerts.clear() 
+    while running:
+        # Pull pre-decoded frame instantly from memory (will block lightly if thread is catching up)
+        try:
+            action, frame = video_reader.frame_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue # Try again
+            
+        if action == "VIDEO_RESET":
+            # Reset entire pipeline state perfectly in-sync with the frame flip to prevent ID ghosting
+            pipeline = SecureVisionPipeline(stream_id="desktop_stream")
+            frame_count = 0
             continue
             
         frame_count += 1
@@ -81,7 +134,7 @@ def main():
         process_h = int(PROCESSING_WIDTH * aspect_ratio)
         frame_small = cv2.resize(frame_rgb, (PROCESSING_WIDTH, process_h))
         
-        # Run Pipeline
+        # Run Heavy Pipeline
         annotated_frame, status, log_data = pipeline.process_frame(frame_small, frame_count)
         
         # Broadcast Logs to API/Frontend
@@ -139,7 +192,8 @@ def main():
 
     # Cleanup
     running = False
-    cap.release()
+    video_reader.stop()
+    video_reader.join(timeout=2.0)
     cv2.destroyAllWindows()
     logger.info("System Shutdown Complete.")
     sys.exit(0)

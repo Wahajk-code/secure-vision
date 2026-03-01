@@ -6,34 +6,39 @@ try:
 except ImportError:
     YOLO = None
     print("Warning: ultralytics not installed. Real object detection will not work.")
-from config import WEAPON_CLASSES, MODEL_PATH_LAYER1
+from config import WEAPON_CLASSES
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Singleton pattern or global variable to hold the model to avoid reloading every frame
-_model = None
+# Storage for both models
+_models = {'base': None, 'weapons': None}
 
-def get_model():
-    global _model
+def get_models():
+    """Lazy load both models into VRAM to ensure we don't blow up init times."""
+    global _models
     if YOLO is None:
-        logger.error("Ultralytics not installed. Cannot load model.")
+        logger.error("Ultralytics not installed. Cannot load models.")
         return None
 
-    if _model is None:
-        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', MODEL_PATH_LAYER1)
-        if not os.path.exists(model_path):
-            logger.error(f"Model not found at {model_path}. Please place 'best.pt' in securevision_core/models/")
-            # Fallback to a standard model if specific one missing, or just fail?
-            # For now let's try to load 'yolov8n.pt' as fallback if user hasn't put their model yet, 
-            # BUT the user said they have a custom model with specific classes.
-            # Using standard yolov8n might give wrong classes.
-            # Better to raise error or return empty if file missing.
-            raise FileNotFoundError(f"YOLO model file not found at {model_path}")
-        
-        logger.info(f"Loading YOLO model from {model_path}...")
-        _model = YOLO(model_path)
-    return _model
+    from config import MODEL_BASE, MODEL_WEAPONS
+
+    if _models['base'] is None:
+        path_base = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', MODEL_BASE)
+        if not os.path.exists(path_base):
+            raise FileNotFoundError(f"YOLO Base model not found at {path_base}")
+        logger.info(f"Loading Base model from {path_base}...")
+        # Load with fp16 directly if possible? YOLO handles half precision in .track()
+        _models['base'] = YOLO(path_base)
+
+    if _models['weapons'] is None:
+        path_weapons = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', MODEL_WEAPONS)
+        if not os.path.exists(path_weapons):
+             raise FileNotFoundError(f"YOLO Weapon model not found at {path_weapons}")
+        logger.info(f"Loading Weapon model from {path_weapons}...")
+        _models['weapons'] = YOLO(path_weapons)
+
+    return _models
 
 def get_yolo_detections(frame, frame_number):
     """
@@ -50,55 +55,66 @@ def get_yolo_detections(frame, frame_number):
     Returns:
         list: List of dicts representing active tracks.
     """
-    model = get_model()
+    models = get_models()
     detections = []
     
-    if model is None:
+    if models is None:
         return detections
     
-    from config import WEAPON_CLASSES, MODEL_PATH_LAYER1, TRACKER_TYPE, USE_CUDA
+    from config import WEAPON_CLASSES, BASE_CLASSES, TRACKER_TYPE, USE_CUDA, CONFIDENCE_THRESHOLDS, MIN_CONFIDENCE
     
-    # Run tracking
-    # persist=True ensures track IDs are maintained across frames
     device = 0 if USE_CUDA else 'cpu'
-    # Use half precision (fp16) if using CUDA for speedup
-    results = model.track(frame, persist=True, tracker=TRACKER_TYPE, device=device, verbose=False, conf=0.1, half=USE_CUDA)
+
+    # --- SEQUENTIAL BRUTE FORCE LOGIC ---
+    # Run both models on every single frame to maximize accuracy
+    # 1. Base Model (People, Luggage, Knives)
+    results_base = models['base'].track(frame, persist=True, tracker=TRACKER_TYPE, device=device, verbose=False, conf=MIN_CONFIDENCE, half=USE_CUDA)
     
-    if not results:
-        return detections
-        
-    r = results[0]
+    # 2. Weapon Model (Guns, Rifles)
+    results_weapons = models['weapons'].track(frame, persist=True, tracker=TRACKER_TYPE, device=device, verbose=False, conf=MIN_CONFIDENCE, half=USE_CUDA)
     
-    if r.boxes:
-        for box in r.boxes:
-            # box.xyxy: [x1, y1, x2, y2]
-            # box.id: track ID (if available)
-            # box.cls: class index
-            # box.conf: confidence
+    # Helper function to process results
+    def process_results(results, model_instance, valid_classes):
+        if not results:
+            return
             
-            coords = box.xyxy[0].cpu().numpy() # [x1, y1, x2, y2]
-            x1, y1, x2, y2 = map(int, coords)
-            
-            cls_id = int(box.cls[0].item())
-            cls_name = model.names[cls_id]
-            
-            # Track ID might be None if just detected and not tracked yet? 
-            # Usually 'track' returns IDs. If None, we can assign -1 or skip.
-            track_id = int(box.id[0].item()) if box.id is not None else -1
-            
-            centroid_x = (x1 + x2) / 2
-            centroid_y = (y1 + y2) / 2
-            
-            detection = {
-                'track_id': track_id,
-                'class': cls_name,
-                'bbox': [x1, y1, x2, y2],
-                'centroid': [centroid_x, centroid_y],
-                'confidence': float(box.conf[0].item())
-            }
-            
-            detections.append(detection)
-            
-            # Additional logic for weapon detection logging handled in pipeline.py
-            
+        r = results[0]
+        if r.boxes:
+            for box in r.boxes:
+                coords = box.xyxy[0].cpu().numpy() # [x1, y1, x2, y2]
+                x1, y1, x2, y2 = map(int, coords)
+                
+                cls_id = int(box.cls[0].item())
+                cls_name = model_instance.names[cls_id]
+                
+                # Model-Specific Class Gating
+                if cls_name not in valid_classes:
+                    continue
+                    
+                conf = float(box.conf[0].item())
+                
+                # Apply per-class confidence threshold filtering
+                req_conf = CONFIDENCE_THRESHOLDS.get(cls_name, 0.4)
+                if conf < req_conf:
+                    continue
+                
+                # Track ID might be None if just detected and not tracked yet? 
+                track_id = int(box.id[0].item()) if box.id is not None else -1
+                
+                centroid_x = (x1 + x2) / 2
+                centroid_y = (y1 + y2) / 2
+                
+                detection = {
+                    'track_id': track_id,
+                    'class': cls_name,
+                    'bbox': [x1, y1, x2, y2],
+                    'centroid': [centroid_x, centroid_y],
+                    'confidence': conf
+                }
+                detections.append(detection)
+
+    # Process both arrays
+    process_results(results_base, models['base'], BASE_CLASSES)
+    process_results(results_weapons, models['weapons'], WEAPON_CLASSES)
+    
     return detections

@@ -6,6 +6,7 @@ from core_pipeline.real_layer1 import get_yolo_detections
 from utils.logger import setup_logger
 from utils.stats_manager import StatsManager
 from core_pipeline.reid_manager import ReIDManager
+from core_pipeline.fight_detector import FightDetector
 
 logger = setup_logger(__name__)
 
@@ -16,15 +17,12 @@ class SecureVisionPipeline:
         self.tracker_state = TrackerState()
         self.stats_manager = StatsManager()
         self.reid_manager = ReIDManager() # Initialize ReID
-        
-        # State to track if we are in "Fight Detected" mode
-        self.fight_detected_state = {
-            'active': False,
-            'frame_counter': 0,
-            'involved_ids': []
-        }
+        self.fight_detector = FightDetector() # Initialize Fight Detector
+        self.recording_frames_left = 0 # Initialize recording state
+        self.fight_snapshot_cooldown = 0 # Prevent taking thousands of screenshots for continuous fights
+        self.alert_persistence = {} # {tid: {'status': ..., 'details': ..., 'color': ..., 'frames': 30}}
 
-    def process_frame(self, frame, frame_number):
+    def process_frame(self, frame, frame_number, capture_callback=None):
         """
         Main processing function for the pipeline instance.
         """
@@ -34,8 +32,54 @@ class SecureVisionPipeline:
         # 2. Update Tracker State
         self.tracker_state.update(detections, frame_number)
         
-        # 3. Layer 2: Check for Potential Fight (DISABLED)
-        # potential_fight_ids = check_for_potential_fight(self.tracker_state)
+        # Decrement snapshot cooldown
+        if self.fight_snapshot_cooldown > 0:
+            self.fight_snapshot_cooldown -= 1
+            
+        # 3. Layer 2: Check for Fight
+        fight_events = self.fight_detector.process(self.tracker_state.get_all_tracks(), frame_number, frame)
+        
+        # Map fight status to IDs for O(1) lookup during drawing
+        # format: {id: {'status': 'WARNING'|'CONFIRMED', 'partner': id}}
+        fight_status_map = {}
+        for event in fight_events:
+            id1, id2 = event['ids']
+            status = event['status']
+            timer = event.get('timer', 0)
+            fight_status_map[id1] = {'status': status, 'partner': id2, 'timer': timer}
+            fight_status_map[id2] = {'status': status, 'partner': id1, 'timer': timer}
+            
+            # Log critical fights
+            if status == 'CONFIRMED':
+                # Throttle logging if needed, or rely on StatsManager in detector?
+                # For now let's just ensure we have global visibility
+                logger.warning(f"[{self.stream_id}] CRITICAL: FIGHT DETECTED! IDs: {id1}-{id2}")
+                # Start/Extend Recording only if cooldown has expired
+                if self.fight_snapshot_cooldown == 0:
+                    self.recording_frames_left = 1 # Take exactly 1 snapshot
+                    self.fight_snapshot_cooldown = 150 # Wait 150 frames (5 seconds) before taking another snapshot of any fight
+                    self._last_critical_reason = f"CRITICAL: FIGHT DETECTED! IDs: {id1}-{id2}"
+                
+        # 3.1. Frame Recording Logic
+        if self.recording_frames_left > 0:
+            import os
+            # Ensure directory exists (can be moved to init usually, but safe here)
+            capture_dir = os.path.join(os.path.dirname(__file__), '..', 'captures')
+            os.makedirs(capture_dir, exist_ok=True)
+            
+            # Save Frame
+            filename = os.path.join(capture_dir, f"critical_event_frame_{frame_number}.jpg")
+            try:
+                cv2.imwrite(filename, frame)
+                if capture_callback and hasattr(self, '_last_critical_reason'):
+                    capture_callback(filename, getattr(self, '_last_critical_reason', "CRITICAL EVENT"))
+                # logger.info(f"Captured fight frame: {filename}") # Optional: Debug log
+            except Exception as e:
+                logger.error(f"Failed to save frame: {e}")
+                
+            self.recording_frames_left -= 1
+            if self.recording_frames_left == 0:
+                logger.info(f"[{self.stream_id}] Incident Recording Snapshot Saved.")
         
         # 3.2. ReID Processing (Person Identification)
         all_tracks = self.tracker_state.get_all_tracks()
@@ -92,22 +136,11 @@ class SecureVisionPipeline:
         # 3.5. Luggage Association
         self.tracker_state.assign_owners()
         
-        status_message = "System Active"
-        color = (0, 255, 0) # Green (RGB)
-        
-        # Handle persistent alert state
-        if self.fight_detected_state['active']:
-            status_message = f"FIGHT DETECTED! IDs: {self.fight_detected_state['involved_ids']}"
-            color = (0, 165, 255) # Orange for Fight (BGR)
-            self.fight_detected_state['frame_counter'] -= 1
-            if self.fight_detected_state['frame_counter'] <= 0:
-                self.fight_detected_state['active'] = False
-
         # State Collection for Dashboard
         luggage_dashboard_data = []
 
         # Annotation
-        from config import ABANDONED_DURATION_FRAMES, LUGGAGE_CLASSES, GHOST_FRAMES
+        from config import ABANDONED_DURATION_FRAMES, LUGGAGE_CLASSES, GHOST_FRAMES_WEAPON, GHOST_FRAMES_LUGGAGE, GHOST_FRAMES_PERSON
         
         # Get all updated tracks to access metadata like owner_id
         all_tracks = self.tracker_state.get_all_tracks()
@@ -116,11 +149,28 @@ class SecureVisionPipeline:
         
         # Iterate over ALL tracks to handle persistence (Ghost Tracking)
         for tid, track in all_tracks.items():
+            # Decrement persistence timer for this track if it exists
+            if tid in self.alert_persistence:
+                self.alert_persistence[tid]['frames'] -= 1
+                if self.alert_persistence[tid]['frames'] <= 0:
+                    del self.alert_persistence[tid]
+            
+            # Extract Class early for persistence rules
+            cls = track['class']
+            
             # Use Mapped ID for Display if available
             display_id = self.tracker_state.get_mapped_id(tid)
             
-            # skip if track is too old (older than GHOST_FRAMES)
-            if frame_number - track['last_seen'] > GHOST_FRAMES:
+            # Determine class-specific persistence allowance
+            if cls in WEAPON_CLASSES:
+                ghost_thresh = GHOST_FRAMES_WEAPON
+            elif cls in LUGGAGE_CLASSES:
+                ghost_thresh = GHOST_FRAMES_LUGGAGE
+            else:
+                ghost_thresh = GHOST_FRAMES_PERSON
+            
+            # skip if track is too old AND we don't have an actively flashing persistent alert
+            if (frame_number - track['last_seen'] > ghost_thresh) and (tid not in self.alert_persistence):
                 continue
 
             # Check for sufficient history to draw
@@ -128,15 +178,24 @@ class SecureVisionPipeline:
                 continue
 
             bbox = track['bbox'][-1] # Get latest bbox
-            cls = track['class']
             
             # If track is lost (ghost), maybe visually distinguish it? 
             is_ghost = (frame_number - track['last_seen'] > 0)
             
-            current_color = color # Default Green/Red based on Fight status
+            current_color = (0, 255, 0) # Global fallback color
             label_suffix = ""
             if is_ghost:
                 label_suffix += " (LOST)"
+            
+            # Initialize obj_data early so all logic branches can update it
+            obj_data = {
+                "id": tid,
+                "category": cls,
+                "status": "Normal",
+                "details": "Tracking"
+            }
+            if is_ghost:
+                obj_data["details"] = "Tracking (Lost)"
             
             if cls == 'person':
                 # Show Persistent ID
@@ -144,18 +203,24 @@ class SecureVisionPipeline:
             
             # Weapon Detection Alert
             if cls in WEAPON_CLASSES:
-                status_message = f"WEAPON DETECTED! ({cls.upper()})"
-                current_color = (0, 0, 255) # Red for Weapon (BGR)
-                if not is_ghost: # Only log fresh detections to avoid spamming logs for ghosts
-                     # Note: ideally we'd track weapon alerts too to prevent duplicate logs, 
-                     # but user specifically asked about luggage.
-                     pass 
-                # For weapons, existing logic was logging on every frame... 
-                # Let's keep it but ideally we should fix that too. 
-                # But prioritizing Luggage as requested.
-                if not is_ghost:
-                     # logger.critical(f"[{self.stream_id}] WEAPON DETECTED: {cls} at {bbox}") # Reduced log spam
-                     pass
+                frames_seen = len(track['bbox'])
+                
+                # Debounce: Require at least 3 frames of tracking to confirm it's a real weapon and not a glitch
+                if frames_seen >= 3:
+                    current_color = (0, 0, 255) # Red for Weapon (BGR)
+                    
+                    # Flag as critical immediately
+                    obj_data["status"] = "CRITICAL"
+                    obj_data["details"] = "WEAPON"
+                    
+                    if not is_ghost and self.fight_snapshot_cooldown == 0:
+                         self.recording_frames_left = 1
+                         self.fight_snapshot_cooldown = 150 # 5 sec cooldown for all critical grabs
+                         self._last_critical_reason = f"WEAPON DETECTED! ({cls.upper()})"
+                else:
+                    current_color = (0, 165, 255) # Orange for verification
+                    obj_data["status"] = "WARNING"
+                    obj_data["details"] = f"Verifying ({frames_seen}/3)"
 
             # Luggage Logic
             elif cls in LUGGAGE_CLASSES:
@@ -168,49 +233,70 @@ class SecureVisionPipeline:
                 if owner_id is not None:
                     owner_info = f"Person {owner_id}"
                     label_suffix += f" (Owner: {owner_id})" # Always show owner ID
-                    
-                    # Draw line to owner
-                    owner_track = all_tracks.get(owner_id)
-                    # Only draw line if owner is also currently tracked or recently lost
-                    if owner_track and (frame_number - owner_track['last_seen'] <= GHOST_FRAMES):
-                        owner_centroid = owner_track['centroid'][-1]
-                        lug_centroid = track['centroid'][-1]
-                        cv2.line(frame, 
-                                    (int(lug_centroid[0]), int(lug_centroid[1])), 
-                                    (int(owner_centroid[0]), int(owner_centroid[1])), 
-                                    (0, 255, 255), 2) # Cyan line (RGB: 0, 255, 255)
-                        # label_suffix += f" (Owner: {owner_id})" # Removed redundant add
                 
                 timer_display = "Safe"
                 if abandoned_timer > 0:
                     frames_left = ABANDONED_DURATION_FRAMES - abandoned_timer
                     if frames_left > 0:
                         timer_display = f"⚠️ {frames_left / 30:.1f}s"
+                        obj_data["details"] = timer_display
+                        obj_data["status"] = "WARNING"
                     else:
                         lug_status = "ABANDONED"
-                        timer_display = "🚨 ALERT"
-                        status_message = f"ABANDONED LUGGAGE! (ID: {tid})"
                         current_color = (0, 255, 255) # Yellow for Abandoned Luggage (BGR)
+                        
+                        obj_data["details"] = "🚨 ABANDONED"
+                        obj_data["status"] = "CRITICAL"
                         
                         # LOGGING LOGIC (FIXED)
                         if not track.get('is_abandoned_event_triggered', False):
                             logger.warning(f"[{self.stream_id}] Abandoned Luggage ID {tid} detected!")
                             self.stats_manager.log_event("ABANDONED_LUGGAGE", {"track_id": tid, "stream": self.stream_id})
                             track['is_abandoned_event_triggered'] = True
-                        
-            # Add to dashboard data (ALL objects)
-            obj_data = {
-                "id": tid,
-                "category": cls,
-                "status": "Normal",
-                "details": "Tracking"
-            }
-            if is_ghost:
-                obj_data["details"] = "Tracking (Lost)"
+                            
+                        # Grab frame
+                            if self.fight_snapshot_cooldown == 0:
+                                self.recording_frames_left = 1
+                                self.fight_snapshot_cooldown = 150
+                                self._last_critical_reason = f"ABANDONED LUGGAGE! (ID: {tid})"
+            
+            # Fight Status Override
+            if tid in fight_status_map:
+                f_info = fight_status_map[tid]
+                timer_val = f_info.get('timer', 0)
+                if f_info['status'] == 'CONFIRMED':
+                    obj_data['status'] = 'CRITICAL'
+                    obj_data['details'] = f"FIGHTING with {f_info['partner']}"
+                    current_color = (139, 0, 0)  # Dark Blue in BGR
+                    label_suffix += " (FIGHT!)"
+                elif f_info['status'] == 'WARNING':
+                     obj_data['status'] = 'WARNING'
+                     obj_data['details'] = f"Analyzing {timer_val}/30 (P{f_info['partner']})"
+                     current_color = (0, 165, 255)
+                     label_suffix += f" (Wait: {timer_val}/30)"
+
+            # Apply / Save Persistence
+            if obj_data['status'] in ['WARNING', 'CRITICAL']:
+                if not is_ghost:
+                    # Save to persistence cache only if actively tracked
+                    self.alert_persistence[tid] = {
+                        'status': obj_data['status'],
+                        'details': obj_data['details'],
+                        'color': current_color,
+                        'frames': 30 # Hold this alert visually for 1 second minimum
+                    }
+                elif tid in self.alert_persistence:
+                    # Clear persistence immediately if object is definitively lost
+                    del self.alert_persistence[tid]
+            elif tid in self.alert_persistence:
+                # Restore from persistence cache if current frame didn't trigger
+                p = self.alert_persistence[tid]
+                obj_data['status'] = p['status']
+                obj_data['details'] = p['details']
+                current_color = p['color']
 
             if cls in WEAPON_CLASSES:
-                obj_data["status"] = "CRITICAL"
-                obj_data["details"] = "Weapon Detected"
+                pass # Already handled above
                 
             elif cls in LUGGAGE_CLASSES:
                 obj_data["details"] = f"Owner: {owner_id if owner_id is not None else 'None'}"
@@ -230,19 +316,30 @@ class SecureVisionPipeline:
             if is_ghost:
                 # Dim the color for ghost tracks
                 box_color = (int(box_color[0]*0.5), int(box_color[1]*0.5), int(box_color[2]*0.5))
-
-            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), box_color, 2)
+                
+            # ENFORCEMENT: ONLY DRAW 3 SPECIFIC BOUNDING BOXES
+            # Abandoned Luggage = Yellow (0, 255, 255)
+            # Confirmed Weapon = Red (0, 0, 255) 
+            # Confirmed Fight = Dark Blue (139, 0, 0)
             
-            label = f"{cls} {display_id}{label_suffix}"
-            cv2.putText(frame, label, (int(bbox[0]), int(bbox[1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, box_color, 2)
-            
-        # Draw Status Text
-        cv2.putText(frame, status_message, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
+            should_draw = False
+            if obj_data['category'] in LUGGAGE_CLASSES and obj_data['status'] == 'CRITICAL':
+                should_draw = True # Abandoned Luggage
+            elif obj_data['category'] in WEAPON_CLASSES and obj_data['status'] == 'CRITICAL':
+                should_draw = True # Confirmed Weapon
+            elif obj_data['category'] == 'person' and 'FIGHTING' in obj_data['details']:
+                should_draw = True # Confirmed Fight
+                
+            if should_draw:
+                cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), box_color, 2)
+                
+                label = f"{cls} {display_id}{label_suffix}"
+                cv2.putText(frame, label, (int(bbox[0]), int(bbox[1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, box_color, 2)
 
-        return frame, status_message, luggage_dashboard_data
+        return frame, "", luggage_dashboard_data
 
 # Keep legacy function for backward compatibility
-def process_frame(frame, frame_number):
+def process_frame(frame, frame_number, capture_callback=None):
     if not hasattr(process_frame, 'pipeline'):
         process_frame.pipeline = SecureVisionPipeline()
-    return process_frame.pipeline.process_frame(frame, frame_number)
+    return process_frame.pipeline.process_frame(frame, frame_number, capture_callback=capture_callback)
