@@ -9,6 +9,7 @@ import os
 import json
 import logging
 from typing import List
+from pydantic import BaseModel
 
 # Add parent dir to path to import securevision_core modules
 import sys
@@ -21,6 +22,20 @@ from api import auth, users
 from database import engine
 from models_db import Base
 from utils.stats_manager import StatsManager
+from agents.summary_agent import SummaryAgent
+from utils.camera_registry import CameraRegistry
+
+
+class CameraConfig(BaseModel):
+    id: str
+    name: str
+    sector: str
+    area: str
+    is_active: bool = True
+
+
+class CameraConfigPayload(BaseModel):
+    cameras: List[CameraConfig]
 
 # Create Tables
 Base.metadata.create_all(bind=engine)
@@ -162,3 +177,24 @@ def get_historical_stats():
     """
     manager = StatsManager()
     return manager.get_stats()
+
+@app.get("/api/summary/daily")
+def get_daily_summary(date: str = None):
+    """
+    Returns an end-of-day operational summary. If date is omitted,
+    the report is generated for the current local date.
+    """
+    manager = StatsManager()
+    summary_agent = SummaryAgent(manager)
+    return summary_agent.generate_daily_summary(date)
+
+@app.get("/api/cameras")
+def get_cameras():
+    registry = CameraRegistry()
+    return {"cameras": registry.list_cameras(), "default_camera_id": "cam_01"}
+
+@app.put("/api/cameras")
+def update_cameras(payload: CameraConfigPayload):
+    registry = CameraRegistry()
+    cameras = registry.save_cameras([camera.dict() for camera in payload.cameras])
+    return {"cameras": cameras, "default_camera_id": "cam_01"}

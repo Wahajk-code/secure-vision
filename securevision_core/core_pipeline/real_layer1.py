@@ -110,7 +110,7 @@ def get_yolo_detections(frame, frame_number):
                     w_ratio = box_w / frame_w
                     
                     if ratio > MAX_WEAPON_BBOX_AREA_RATIO or h_ratio > MAX_WEAPON_BBOX_HEIGHT_RATIO or w_ratio > MAX_WEAPON_BBOX_WIDTH_RATIO:
-                        logger.warning(f"[Size Filter] Ignoring massive {cls_name}. Area: {ratio:.2f} (H: {h_ratio:.2f}, W: {w_ratio:.2f})")
+                        logger.debug(f"[Size Filter] Ignoring massive {cls_name}. Area: {ratio:.2f} (H: {h_ratio:.2f}, W: {w_ratio:.2f})")
                         continue # Bbox is too large to be a valid weapon
                 
                 # Track ID might be None if just detected and not tracked yet? 

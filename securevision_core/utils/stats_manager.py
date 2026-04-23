@@ -3,10 +3,13 @@ import time
 from datetime import datetime
 import psycopg2
 from config import DB_CONFIG
+from agents.alert_rules import AlertRuleEngine
+from utils.camera_registry import CameraRegistry
 
 class StatsManager:
     def __init__(self):
-        pass # No file init needed
+        self.alert_rules = AlertRuleEngine()
+        self.camera_registry = CameraRegistry()
 
     def _get_connection(self):
         try:
@@ -23,6 +26,7 @@ class StatsManager:
             event_type (str): 'WEAPON', 'FIGHT', 'ABANDONED_LUGGAGE'
             details (dict): Optional details like {'class': 'gun', 'track_id': 1}
         """
+        details = self._enrich_details(event_type, details or {})
         conn = self._get_connection()
         if not conn: return
 
@@ -38,7 +42,7 @@ class StatsManager:
                 time.time(),
                 datetime.now(),
                 event_type,
-                json.dumps(details or {}),
+                json.dumps(details),
                 stream_id
             ))
             conn.commit()
@@ -46,6 +50,44 @@ class StatsManager:
             conn.close()
         except Exception as e:
             print(f"Error logging stats to DB: {e}")
+
+    def _enrich_details(self, event_type, details):
+        """
+        Stores deterministic alert interpretation with every event so summaries
+        can explain both what happened and what the supervisor should do.
+        """
+        if not isinstance(details, dict):
+            return {"raw_details": details}
+
+        normalized = dict(details)
+        normalized["event_type"] = event_type
+        if event_type == "WEAPON":
+            normalized["subtype"] = str(details.get("class", details.get("subtype", "weapon"))).lower()
+            normalized.setdefault("frames_seen", 10)
+            normalized.setdefault("person_present", True)
+        elif event_type == "FIGHT":
+            normalized["subtype"] = "physical_altercation"
+            normalized.setdefault("status", "CONFIRMED")
+        elif event_type == "ABANDONED_LUGGAGE":
+            normalized["subtype"] = "luggage"
+            normalized.setdefault("status", "CRITICAL")
+            normalized.setdefault("details", "ABANDONED")
+        else:
+            return normalized
+
+        camera_id = normalized.get("camera_id", "cam_01")
+        camera = self.camera_registry.get_camera(camera_id)
+        normalized.setdefault("camera_id", camera.get("id"))
+        normalized.setdefault("camera_name", camera.get("name"))
+        normalized.setdefault("sector", camera.get("sector"))
+        normalized.setdefault("area", camera.get("area"))
+
+        try:
+            decision = self.alert_rules.evaluate(normalized)
+            return decision.to_db_details()
+        except Exception as e:
+            normalized["alert_enrichment_error"] = str(e)
+            return normalized
 
     def get_stats(self):
         """

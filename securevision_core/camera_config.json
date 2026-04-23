@@ -1,0 +1,32 @@
+{
+  "cameras": [
+    {
+      "id": "cam_01",
+      "name": "Camera 1",
+      "sector": "Sector A onga bonga place",
+      "area": "Area A - Main Entrance",
+      "is_active": true
+    },
+    {
+      "id": "cam_02",
+      "name": "Camera 2",
+      "sector": "Sector B ismaeel town",
+      "area": "Area B - Lobby",
+      "is_active": true
+    },
+    {
+      "id": "cam_03",
+      "name": "Camera 3",
+      "sector": "Sector C the abbasid empire",
+      "area": "Area C - Corridor",
+      "is_active": true
+    },
+    {
+      "id": "cam_04",
+      "name": "Camera 4",
+      "sector": "Sector D wajistan",
+      "area": "Area D - Parking",
+      "is_active": true
+    }
+  ]
+}

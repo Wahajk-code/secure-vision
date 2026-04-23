@@ -55,7 +55,8 @@ class SecureVisionPipeline:
             if status == 'CONFIRMED':
                 # Throttle logging if needed, or rely on StatsManager in detector?
                 # For now let's just ensure we have global visibility
-                logger.warning(f"[{self.stream_id}] CRITICAL: FIGHT DETECTED! IDs: {id1}-{id2}")
+                # High-frequency fight state log disabled; run_system logs operational alerts at a controlled cadence.
+                # logger.warning(f"[{self.stream_id}] CRITICAL: FIGHT DETECTED! IDs: {id1}-{id2}")
                 # Start/Extend Recording only if cooldown has expired
                 if self.fight_snapshot_cooldown == 0:
                     self.recording_frames_left = 1 # Take exactly 1 snapshot
@@ -93,14 +94,14 @@ class SecureVisionPipeline:
                             matched_id, score = self.reid_manager.find_match(embedding)
                             if matched_id is not None:
                                 if current_mapped_id != matched_id:
-                                    logger.info(f"[ReID] Matched BoTSORT {tid} -> Person {matched_id} (Score: {score:.2f})")
+                                    logger.debug(f"[ReID] Matched BoTSORT {tid} -> Person {matched_id} (Score: {score:.2f})")
                                     self.tracker_state.set_mapping(tid, matched_id)
                                     self.reid_manager.update_identity(matched_id, embedding, frame_number)
                             else:
                                 if tid not in self.tracker_state.id_map:
                                     new_pid = self.reid_manager.register_new_identity(embedding, frame_number)
                                     self.tracker_state.set_mapping(tid, new_pid)
-                                    logger.info(f"[ReID] New Identity Registered: Person {new_pid} (from BoTSORT {tid})")
+                                    logger.debug(f"[ReID] New Identity Registered: Person {new_pid} (from BoTSORT {tid})")
                                 else:
                                     pid = self.tracker_state.get_mapped_id(tid)
                                     self.reid_manager.update_identity(pid, embedding, frame_number)

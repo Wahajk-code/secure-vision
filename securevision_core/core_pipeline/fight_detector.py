@@ -121,8 +121,8 @@ class FightDetector:
                             pose_activity = max(arm_score_1, arm_score_2)
                             self.active_pairs[pair_key]['last_pose'] = pose_activity
                             
-                            # Log live tuning values
-                            print(f"[TUNING] IDs {id1}-{id2} | Vel: {body_velocity:.1f} (Thresholds: {VELOCITY_THRESHOLD_ACITVITY}/{VELOCITY_THRESHOLD_EXPLOSIVE}) | Pose: {pose_activity:.1f} (Threshold: {self.POSE_ACTIVITY_THRESHOLD})")
+                            # Tuning log disabled for normal runs; it is too noisy during active fights.
+                            # print(f"[TUNING] IDs {id1}-{id2} | Vel: {body_velocity:.1f} (Thresholds: {VELOCITY_THRESHOLD_ACITVITY}/{VELOCITY_THRESHOLD_EXPLOSIVE}) | Pose: {pose_activity:.1f} (Threshold: {self.POSE_ACTIVITY_THRESHOLD})")
                             
                             if pose_activity > self.POSE_ACTIVITY_THRESHOLD:
                                 # Run Mock Model Verification
