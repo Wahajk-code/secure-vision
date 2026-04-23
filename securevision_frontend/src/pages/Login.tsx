@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { ShieldCheck, Lock, User, ArrowRight } from 'lucide-react';
+import { Lock, User, ArrowRight } from 'lucide-react';
 
 export const Login = () => {
     const [username, setUsername] = useState('');

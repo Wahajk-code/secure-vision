@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, AlertTriangle, User, Clock, Package, Eye } from 'lucide-react';
+import { Shield, AlertTriangle, User, Package, Eye } from 'lucide-react';
 
 export interface LiveObject {
     id: number;
@@ -10,9 +10,14 @@ export interface LiveObject {
 
 interface LiveEventsTableProps {
     objects: LiveObject[];
+    camera?: {
+        name: string;
+        sector: string;
+        area: string;
+    } | null;
 }
 
-export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects }) => {
+export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects, camera }) => {
     return (
         <div className="h-full flex flex-col relative group">
             {/* Gradient Overlay */}
@@ -26,6 +31,11 @@ export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects }) => 
                     </div>
                     <div>
                         <h2 className="text-sm font-black text-white tracking-widest uppercase">Live Targets</h2>
+                        {camera && (
+                            <p className="text-[10px] text-orange-300 font-mono mt-0.5">
+                                {camera.name} / {camera.sector} / {camera.area}
+                            </p>
+                        )}
                     </div>
                 </div>
                 <div className="flex items-center gap-2 px-3 py-1 bg-black/40 rounded-full border border-green-500/20 shadow-[0_0_10px_rgba(34,197,94,0.1)]">

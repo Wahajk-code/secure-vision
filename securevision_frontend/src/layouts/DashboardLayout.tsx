@@ -26,6 +26,13 @@ interface ChartDataPoint {
     luggage: number;
 }
 
+interface CameraInfo {
+    id?: string;
+    name: string;
+    sector: string;
+    area: string;
+}
+
 export const DashboardLayout = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -46,6 +53,7 @@ export const DashboardLayout = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [fps, setFps] = useState<number>(0);
   const [liveObjects, setLiveObjects] = useState<LiveObject[]>([]);
+  const [currentCamera, setCurrentCamera] = useState<CameraInfo | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   
   // Notification State
@@ -185,6 +193,9 @@ export const DashboardLayout = () => {
                  // 1. LIVE FEED
                  if (data.type === 'LIVE_FEED' && data.objects) {
                      setLiveObjects(data.objects);
+                     if (data.camera) {
+                         setCurrentCamera(data.camera);
+                     }
                      return;
                  }
 
@@ -205,15 +216,17 @@ export const DashboardLayout = () => {
                              setNotifications(prev => [newLog, ...prev].slice(0, 10));
                          }
                      }
-                 } else if (data.type === 'CRITICAL') {
+                 } else if (data.type === 'CRITICAL' || data.type === 'WARNING') {
                      const logEntry: LogEntry = {
-                         type: 'CRITICAL',
+                         type: data.type,
                          message: data.message,
                          timestamp: data.timestamp
                      };
                      setLogs(prev => [logEntry, ...prev].slice(0, 50));
                      handleCriticalEvent(logEntry);
-                     setNotifications(prev => [logEntry, ...prev].slice(0, 10));
+                     if (data.type === 'CRITICAL') {
+                         setNotifications(prev => [logEntry, ...prev].slice(0, 10));
+                     }
                  }
                  
                  // 4. Critical Images Structure
@@ -374,7 +387,7 @@ export const DashboardLayout = () => {
                 <div className="flex-1 grid grid-cols-2 gap-4 h-full p-4 overflow-hidden">
                     {/* Left: Live Events */}
                     <div className="bg-black/20 border border-white/5 rounded-3xl backdrop-blur-sm overflow-hidden shadow-2xl">
-                        <LiveEventsTable objects={liveObjects} />
+                        <LiveEventsTable objects={liveObjects} camera={currentCamera} />
                     </div>
                     
                     {/* Right: Stats Panel */}
