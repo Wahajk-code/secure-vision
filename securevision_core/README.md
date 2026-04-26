@@ -88,3 +88,8 @@ The active code path references:
 - `models/weapon_detection4.pt`
 - `models/pose26n.pt`
 - `models/fightnet_best_model.pt`
+
+Fallback behavior:
+
+- `yolo11n-pose.pt` at the repo root is only a pose-model fallback
+- it is not part of the normal primary model set

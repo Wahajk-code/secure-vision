@@ -18,7 +18,6 @@ SUSTAINED_DURATION_FRAMES = 60    # ~2 seconds at 30 FPS
 # Model Paths (Mock & Real)
 MODEL_BASE = 'yolo11n.pt'
 MODEL_WEAPONS = 'weapon_detection4.pt'
-MODEL_PATH_LAYER3 = 'fight_classifier.pt'
 
 # Tracker Configuration
 TRACKER_TYPE = 'botsort.yaml' # Heavy ReID CNN enabled

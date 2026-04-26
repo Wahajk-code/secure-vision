@@ -146,6 +146,11 @@ The current active code path references:
 
 There are additional older model artifacts in the repo, but the active runtime uses the list above.
 
+Important clarification:
+
+- `yolo11n-pose.pt` at the repo root is not the normal pose model
+- it is only a fallback if `pose26n.pt` fails to load to CUDA in `pose_filter.py`
+
 ## 5. Important Runtime Rules
 
 ### 5.1 Weapon Flow

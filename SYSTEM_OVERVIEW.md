@@ -385,6 +385,11 @@ The active code path references:
 - `models/pose26n.pt`
 - `models/fightnet_best_model.pt`
 
+Fallback note:
+
+- top-level `yolo11n-pose.pt` is not the primary pose model
+- it is only used as a fallback path in `pose_filter.py` if loading `pose26n.pt` to CUDA fails
+
 ### 9.2 Backend Dependencies
 Important backend packages include:
 
