@@ -1,79 +1,136 @@
-# SecureVision: Technical Deep Dive & Class Structure Script
+# SecureVision Technical Script
 
-This document provides a script and visual guide for presenting the low-level architecture of the SecureVision system. It corresponds to the Class Diagram.
+This script is a presentation-oriented walkthrough of the current backend architecture.
 
----
-
-## Slide 1: The Core Engine (SecureVisionPipeline)
-
-**Visual Focus**: `SecureVisionPipeline` class at the top of the diagram.
+## Slide 1: The Runtime Orchestrator
+**Visual focus**: `run_system.py`
 
 **Script**:
-"At the very heart of our backend is the **SecureVisionPipeline**. Think of this as the 'Conductor' of our orchestra.
+"The current SecureVision runtime starts from `run_system.py`. This file launches FastAPI in the background, opens a mixed surveillance playlist, reads frames through a dedicated video reader thread, and sends each frame into the AI pipeline.
 
-It doesn't do the heavy lifting itself; instead, it orchestrates the entire flow. It takes in a `stream_id` (like a camera feed) and initializes our three critical managers:
-1.  **TrackerState**: For memory.
-2.  **ReIDManager**: For identity.
-3.  **StatsManager**: For logging.
-
-Every single frame from the camera passes through the `process_frame()` method. This is where the magic happens: detection, tracking, and logic checks for threats are triggered in sequence here."
+It also acts as the bridge between raw computer vision output and operator-facing behavior. After the pipeline returns object states, `run_system.py` normalizes them, evaluates them with deterministic rules, queues speech, submits qualifying alerts to the agentic layer, and broadcasts the results to the frontend."
 
 ---
 
-## Slide 2: The System's "Memory" (TrackerState & Track)
-
-**Visual Focus**: `TrackerState` and `Track`.
+## Slide 2: The Core Pipeline
+**Visual focus**: `SecureVisionPipeline`
 
 **Script**:
-"Computer vision models often fail because they have 'amnesia'—they treat every frame as a brand new image. We solved this with the **TrackerState** class.
+"At the heart of the AI runtime is `SecureVisionPipeline`. This class orchestrates detection, tracking, fight analysis, luggage logic, annotation, and event logging hooks.
 
-This is the system's Short-Term Memory.
-It maintains a list of **Tracks**, which are implicit dictionaries holding the history of every object.
--   **Why is this important?** To detect 'Abandoned Luggage', we need to know *how long* a bag has been sitting there.
--   **Ghost Tracking**: If a person walks behind a pillar, `TrackerState` keeps their track alive (a 'ghost') for a few seconds so we don't think they disappeared."
+It does not make the final operator decision on its own. Instead, it returns structured object states that the alert layer can interpret consistently."
 
 ---
 
-## Slide 3: Persistent Identity (ReIDManager)
-
-**Visual Focus**: `ReIDManager` class.
+## Slide 3: Detection And Tracking
+**Visual focus**: `real_layer1.py` and `tracker_state.py`
 
 **Script**:
-"One of the hardest problems in surveillance is **Re-Identification**. If a suspect leaves the room and comes back 10 seconds later, most systems think it's a new person.
+"The first stage is object detection and tracking.
 
-Our **ReIDManager** solves this using a deep learning feature extractor.
--   It extracts a 'visual fingerprint' (embedding) from people in the frame.
--   It compares these fingerprints against a database of `known_identities`.
--   **The Result**: If 'Person A' leaves and returns, the system says 'Welcome back, Person A', preserving the ownership link to their luggage."
+`real_layer1.py` runs two YOLO models every frame:
+- a base model for people and luggage
+- a weapon model for gun/rifle classes
+
+The outputs are normalized into tracks with IDs, bounding boxes, centroids, and confidence scores. `TrackerState` then stores short-term history for each track, which is essential for abandonment logic and movement-based reasoning."
 
 ---
 
-## Slide 4: Data Persistence (StatsManager & Event)
-
-**Visual Focus**: `StatsManager` and `Event` (Database Table).
+## Slide 4: Fight Detection
+**Visual focus**: `fight_detector.py`, `pose_filter.py`, `fightnet_integration.py`
 
 **Script**:
-"Real-time alerts are great, but we also need a paper trail. The **StatsManager** handles our Long-Term Memory.
+"Fight detection is a gated multi-stage process.
 
-It interfaces directly with our PostgreSQL database. Every time a Weapon, Fight, or Abandoned Luggage is detected, it logs an **Event**.
--   We treat Events as immutable records: they have a `timestamp`, `type`, and a flexible JSON `details` field.
--   This allows our Analytics dashboard to query historical data later, answering questions like 'How many weapon alerts happened last Tuesday?'"
+We do not run pose or sequence analysis on every person in every frame. First, `fight_detector.py` checks proximity and body velocity to isolate suspicious pairs. Only then do we crop those ROIs for pose estimation using `pose_filter.py`.
+
+If that pair stays suspicious long enough, the rolling pose buffer is passed to `fightnet_integration.py`, which loads the FightNet model and confirms whether the sequence looks like a real altercation."
 
 ---
 
-## Slide 5: Frontend Communication (AlertMetadata)
-
-**Visual Focus**: `AlertMetadata` and the arrow pointing to the User/Dashboard.
+## Slide 5: Luggage Ownership And Abandonment
+**Visual focus**: `tracker_state.py`
 
 **Script**:
-"Finally, all this intelligence is useless if the human operator doesn't see it.
+"Abandoned luggage detection depends on memory, not just a single frame.
 
-We package our data into **AlertMetadata** objects. This is the standardized API contract we send to the frontend via WebSockets.
--   It translates complex Python objects into simple JSON: `{ 'id': 101, 'status': 'CRITICAL', 'details': 'Knife Detected' }`.
--   This ensures the Frontend remains 'dumb'—it doesn't need to know *how* we detected the knife, it just knows to flash a red alert."
+The system assigns luggage to the nearest persistent person identity. If that owner moves too far away, the unattended timer starts. Warning is delayed for a configured period, and critical status is reached only after the full abandonment timeout.
+
+This helps reduce noise from stray bags, temporary occlusion, and normal crowd motion."
 
 ---
 
-## Summary for Q&A
+## Slide 6: Re-Identification
+**Visual focus**: `reid_manager.py`
 
-**Key Takeaway**: "Our architecture is separated into **Logic (Pipeline)**, **Memory (TrackerState)**, **Identity (ReID)**, and **Persistence (StatsManager)**. This separation of concerns allows us to swap out components (like upgrading the YOLO model) without breaking the rest of the system."
+**Script**:
+"One of the more advanced parts of the architecture is ReID. `reid_manager.py` uses MobileNetV3-based embeddings to keep person identity more stable even when tracker IDs change.
+
+This matters because luggage logic depends on consistent ownership. If the tracker forgets someone for a moment, ReID helps preserve the same logical person."
+
+---
+
+## Slide 7: Deterministic Alert Rules
+**Visual focus**: `event_normalizer.py` and `alert_rules.py`
+
+**Script**:
+"The pipeline output is converted into normalized events and then evaluated by the rule engine.
+
+This is one of the most important architectural decisions in the project. `alert_rules.py` is the source of truth for severity, risk score, event classification, and spoken alert text. That means the operational decision remains deterministic and explainable."
+
+---
+
+## Slide 8: Agentic Layer
+**Visual focus**: `operations_agent_layer.py`
+
+**Script**:
+"On top of the deterministic rules, we added an agentic layer for operator-facing intelligence.
+
+The operations agent layer runs three agents:
+- triage
+- incident timeline
+- operator actions
+
+These agents use strict-JSON OpenAI responses with fallbacks. They do not change severity, event type, or risk score. Their role is to explain the incident, summarize how it is evolving, and present context-aware instructions to the operator."
+
+---
+
+## Slide 9: Persistence And Evidence
+**Visual focus**: `stats_manager.py` and `cloudinary_helper.py`
+
+**Script**:
+"The system keeps both historical logs and visual evidence.
+
+`stats_manager.py` writes enriched events into PostgreSQL. The stored payload is already aligned with the rule engine, so analytics and summaries can reuse the same operational interpretation.
+
+For critical incidents, `cloudinary_helper.py` uploads evidence screenshots and broadcasts the hosted image URL back to the dashboard, along with camera metadata like sector and area."
+
+---
+
+## Slide 10: Frontend Control Layer
+**Visual focus**: `DashboardLayout.tsx` and dashboard components
+
+**Script**:
+"The React dashboard is the operator control layer. It renders:
+- live tracked objects
+- critical incidents
+- agentic summaries
+- operator action plans
+- screenshot evidence
+- historical analytics
+
+The frontend stays relatively presentation-focused. Most of the real operational logic lives on the backend, which keeps the system behavior more consistent and easier to audit."
+
+---
+
+## Slide 11: Key Takeaway
+**Summary Script**:
+"SecureVision is structured around clear separation of concerns:
+
+- perception in the computer vision pipeline
+- deterministic decision-making in the alert rules
+- operator assistance in the agentic layer
+- persistence in the database and evidence services
+- visualization in the React dashboard
+
+That separation is what makes the system easier to evolve without losing operational control."

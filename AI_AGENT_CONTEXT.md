@@ -1,64 +1,239 @@
-# SecureVision: AI Agent Context & System Architecture
+# SecureVision AI Agent Context
 
-This document is designed to provide immediate context for any AI coding agent (Cursor, GitHub Copilot, Google DeepMind Agent, etc.) interacting with the **"SecureVision"** repository. It outlines the core deep learning architecture, the sequential filtering pipeline, and the directory structure so you can navigate the codebase seamlessly.
+This document gives a coding agent fast orientation for the current SecureVision codebase.
 
-## 1. High-Level Architecture
-SecureVision is a real-time smart surveillance pipeline. It fundamentally solves the issue of heavy, computationally expensive AI (Pose Estimation, Temporal Analysis) by utilizing a **Multi-Gated Filtering System**. 
+## 1. What The System Is
+SecureVision is a real-time surveillance runtime that processes local video streams, detects threats, applies deterministic alert rules, and broadcasts operational data to a React dashboard.
 
-Instead of running expensive ML models on every frame, SecureVision uses O(N) or O(N²) heuristic filters on metadata (bounding box centroids, basic velocities) to isolate "suspicious candidates" before passing those specific crops to heavy GPU models.
+Primary incident types:
 
-### Key Capabilities
-1. **Weapon Detection**: Direct object detection of guns and knives at low-confidence thresholds.
-2. **Abandoned Luggage Detection**: Spatial tracking of owners + luggage association over long time windows (150-frame ghosting tolerance).
-3. **Fight Detection**: A highly complex hybrid pipeline combining Proximity → Body Velocity → Limbs/Contact Geometry (Pose) → 30-Frame Sequence Model (FightNet).
-4. **Re-Identification (ReID)**: MobileNetV3 feature extraction to reliably map disjoint tracking IDs across occlusion boundaries to persistent Person IDs.
+- weapons
+- fights
+- abandoned luggage
 
----
+Current runtime path:
 
-## 2. Directory Structure & File Map
+- `securevision_core/run_system.py`
+- `securevision_core/api/main.py`
+- `securevision_core/core_pipeline/pipeline.py`
 
-### Core Pipeline (`securevision_core/core_pipeline/`)
-This is the heart of the system.
-* **`pipeline.py`**: The `SecureVisionPipeline` master orchestrator. Takes raw RGB frames from OpenCV, passes them to Layer 1, updates the tracker, and evaluates fight/luggage states. Returns a data packet that `run_system.py` broadcasts to the React frontend.
-* **`real_layer1.py`**: Runs YOLOv8/11 instance loaded from `weapon_detection3.pt`. Extracts raw bounding boxes for People, Guns, Knives, and Luggage. Filters them against `CONFIDENCE_THRESHOLDS` located in `config.py`.
-* **`tracker_state.py`**: Manages the persistence of bounding boxes across frames using `BoTSORT`. It tracks memory of where objects were, calculating Euclidean distance between bags and people for ownership claims.
-* **`reid_manager.py`**: Uses a MobileNetV3 + Cosine Similarity framework. Extracts feature embeddings from tracked people crops every ~30 frames to guarantee tracking fidelity even if BoTSORT drops an ID.
-* **`fight_detector.py`**: The First Gate for fight detection. Checks Proximity (<150px) between two people. If sustained, it measures Body Velocity. If violently moving, it triggers the Pose Filter. Maintains a 30-frame keypoint rolling buffer (`active_pairs`).
-* **`pose_filter.py`**: The Second Gate. Runs `yolov8m-pose.pt` exclusively on pairs flagged by `fight_detector`. Calculates "Arm Velocity" and "Wrist-to-Torso Contact Distance".
-* **`fightnet_integration.py`**: The Final Model. Converts the 30-frame skeleton history from `pose_filter` into a 150-Dimensional sequence matrix. Passes it through the proprietary 1D-CNN + SE-Block + Attention PyTorch model (`fightnet_best_model.pt`) to output a >0.40 confidence probability.
+## 2. Core Design Principles
 
-### Entry & Config (`securevision_core/`)
-* **`run_system.py`**: The main execution loop. Spawns the FastAPI threading, handles the video `cv2.VideoCapture()` playlist loops, resizes frames dynamically to `PROCESSING_WIDTH`, and emits WebSocket payloads.
-* **`api/main.py`**: A FastAPI backend that hosts the WebSocket connections necessary to feed telemetry to the frontend.
-* **`config.py`**: The master configuration switchboard. Modifying `CONFIDENCE_THRESHOLDS` or video playlists here propagates throughout the entire system.
+### 2.1 Deterministic Alerting First
+The rule engine in `securevision_core/agents/alert_rules.py` is the source of truth for:
 
-### Frontend (`securevision_frontend/`)
-React/Vite dashboard that visualizes the JSON logs emitted by the backend. 
-* Uses **WebSockets** to display critical threats and tracking events in real-time.
+- severity
+- event type
+- risk score
+- whether an alert should be raised
+- spoken alert text
 
----
+Do not move these decisions into the OpenAI layer.
 
-## 3. Important Design Principles for AI Agents
+### 2.2 Expensive Models Are Gated
+The system avoids running heavy models on the whole frame where possible.
 
-When writing or modifying code in this repository, rigidly adhere to these principles:
+- YOLO runs on the frame for object detection/tracking
+- pose inference runs only on suspicious person ROIs
+- FightNet runs only after suspicious pair buffering
+- ReID is used to stabilize identities across tracker churn
 
-1. **The Gating Principle**: Do NOT execute ML inference on the whole frame if it can be avoided. Operations like Pose Estimation or ReID Feature Extraction must ONLY be run on tight `cv2` ROIs (Regions of Interest) explicitly yielded by BoTSORT/Layer 1, and only if a heuristic (velocity, proximity) justifies it.
-2. **GPU Optimization via `cuda`**: Ensure all models (`FightNet`, `MobileNetV3`, `YOLO`) explicitly map their tensors back and forth to `.to('cuda')` and `.cpu().numpy()` at the right boundaries.
-3. **Ghost Tracking Tolerance**: The system operates with "Ghost Frames" for luggage and fights. If an object is momentarily lost by YOLO (e.g., occlusion), the tracker and logic layers assume the object maintains its state for ~150 frames. Do not automatically dump state if a bounding box vanishes for 2 frames.
-4. **Separation of Concerns**: 
-   - `real_layer1.py` handles pure detection.
-   - `tracker_state.py` handles persistent geography.
-   - `fight_detector.py` handles sliding-window business logic.
-   - `pipeline.py` acts strictly as the router/decorator.
-5. **Config First**: Always parameterize thresholds into `config.py` rather than hardcoding them into the pipeline (e.g., `CONFIDENCE_THRESHOLDS`, `MIN_CONFIDENCE`, `FIGHT_PROXIMITY_THRESHOLD_PIXELS`).
+### 2.3 Alerting And Broadcasting Are Separate From Detection
+The rough flow is:
 
-## 4. How the Flow of Data Works
+1. `real_layer1.py` detects objects
+2. `tracker_state.py` maintains history and luggage ownership
+3. `fight_detector.py` evaluates suspicious person pairs
+4. `pipeline.py` composes display/object state rows
+5. `event_normalizer.py` turns rows into normalized events
+6. `alert_rules.py` evaluates severity/score/action
+7. `run_system.py` broadcasts alerts, queues TTS, submits agentic enrichment
 
-1. `test1.mp4` -> `run_system.py`
-2. Resized Frame -> `SecureVisionPipeline.process_frame()`
-3. Frame -> `real_layer1.py` -> Raw Bounding Boxes -> `TrackerState`
-4. `TrackerState` -> Mapped Tracks -> `fight_detector.process()`
-5. `fight_detector` -> finds fast moving pair -> `pose_filter.py` -> 30-Frame Sequence Buffer
-6. **(Sequence Reaches 15+ Frames)** -> `fightnet_integration.py` -> `True/False`
-7. Dashboard Data Packet compiled + Annotated Frame drawn -> returned to `run_system.py`.
-8. `run_system.py` -> `broadcast_log_sync` -> `api/main.py` -> React Frontend UI.
+### 2.4 OpenAI Is Explanation-Only
+The OpenAI-backed layer in `securevision_core/agents/` is used only for:
+
+- triage summaries
+- incident timeline wording
+- operator action plans
+
+It must not override:
+
+- `severity`
+- `event_type`
+- `risk_score`
+- whether the detection is real
+- whether the system should alert
+
+### 2.5 Cost Control Matters
+The agentic/OpenAI layer is not called per frame.
+
+It is gated by:
+
+- severity
+- incident-update status
+- cooldown windows
+
+## 3. File Map
+
+### 3.1 Active Backend Files
+- `securevision_core/run_system.py`
+  - main runtime loop
+  - playlist handling
+  - FastAPI thread startup
+  - alert broadcasting
+  - TTS queueing
+  - agentic submission
+- `securevision_core/api/main.py`
+  - WebSocket broadcaster
+  - stats/summary/camera/auth routes
+- `securevision_core/config.py`
+  - thresholds and model names
+
+### 3.2 Core Pipeline
+- `securevision_core/core_pipeline/pipeline.py`
+  - main frame orchestrator
+- `securevision_core/core_pipeline/real_layer1.py`
+  - YOLO object detection/tracking
+- `securevision_core/core_pipeline/tracker_state.py`
+  - bbox/centroid history
+  - luggage ownership
+- `securevision_core/core_pipeline/fight_detector.py`
+  - active fight detection path
+- `securevision_core/core_pipeline/pose_filter.py`
+  - pose ROI verification
+- `securevision_core/core_pipeline/fightnet_integration.py`
+  - sequence confirmation model
+- `securevision_core/core_pipeline/reid_manager.py`
+  - identity persistence
+
+Important note:
+
+- `securevision_core/core_pipeline/layer2_logic.py` exists, but it is not the active integrated fight path
+
+### 3.3 Agent Layer
+- `securevision_core/agents/event_normalizer.py`
+- `securevision_core/agents/alert_rules.py`
+- `securevision_core/agents/tts_agent.py`
+- `securevision_core/agents/summary_agent.py`
+- `securevision_core/agents/slm_service.py`
+- `securevision_core/agents/alert_triage_agent.py`
+- `securevision_core/agents/incident_timeline_agent.py`
+- `securevision_core/agents/operator_action_agent.py`
+- `securevision_core/agents/operations_agent_layer.py`
+
+### 3.4 Utilities
+- `securevision_core/utils/stats_manager.py`
+- `securevision_core/utils/camera_registry.py`
+- `securevision_core/utils/cloudinary_helper.py`
+- `securevision_core/utils/logger.py`
+
+### 3.5 Frontend
+- `securevision_frontend/src/layouts/DashboardLayout.tsx`
+- `securevision_frontend/src/components/LiveEventsTable.tsx`
+- `securevision_frontend/src/components/StatsPanel.tsx`
+- `securevision_frontend/src/components/AgenticAlertCard.tsx`
+- `securevision_frontend/src/components/ActiveIncidentsPanel.tsx`
+- `securevision_frontend/src/components/OperatorActionCard.tsx`
+- `securevision_frontend/src/components/IncidentDetailModal.tsx`
+
+## 4. Models In Use
+The current active code path references:
+
+- `securevision_core/models/yolo11n.pt`
+- `securevision_core/models/weapon_detection4.pt`
+- `securevision_core/models/pose26n.pt`
+- `securevision_core/models/fightnet_best_model.pt`
+
+There are additional older model artifacts in the repo, but the active runtime uses the list above.
+
+## 5. Important Runtime Rules
+
+### 5.1 Weapon Flow
+- base YOLO + weapon YOLO both run
+- weapon boxes are filtered by confidence and size constraints
+- person presence is required for operational weapon flagging
+- confirmed weapons require `WEAPON_CONFIRMATION_FRAMES`
+
+### 5.2 Fight Flow
+- only close person pairs are evaluated
+- velocity gates pose verification
+- pose activity gates FightNet sequence confirmation
+- warning and critical fight states are distinct
+
+### 5.3 Luggage Flow
+- luggage is assigned to nearest persistent person
+- warning is delayed until `LUGGAGE_WARNING_DELAY_FRAMES`
+- critical occurs at `ABANDONED_DURATION_FRAMES`
+
+### 5.4 Speech And Cooldowns
+TTS is non-blocking and cooldown-aware.
+
+Important behavior:
+
+- warnings for fights and luggage can be spoken
+- repeated speech is deduped by event context, not just tracker ID
+- critical fights have a stronger same-camera cooldown
+
+## 6. Agentic Layer Behavior
+
+### 6.1 `SLMService`
+- uses `OPENAI_API_KEY`
+- required model is `gpt-4o-mini`
+- expects strict JSON
+- has deterministic fallback responses
+- disables model usage for the run if the API fails
+
+### 6.2 `OperationsAgentLayer`
+Pipeline:
+
+1. triage
+2. timeline
+3. actions
+
+It returns a payload like:
+
+```json
+{
+  "type": "AGENTIC_ALERT",
+  "triage": {},
+  "incident": {},
+  "actions": {},
+  "original_event": {}
+}
+```
+
+### 6.3 `OperatorActionAgent`
+Starts with deterministic action templates and uses OpenAI only to personalize:
+
+- `action_plan`
+- `operator_note`
+- `escalation_hint`
+
+The personalization now uses:
+
+- event subtype
+- severity/risk level/risk score
+- confidence
+- camera/sector/area
+- deterministic recommended action
+- dashboard message
+- triage summary
+- incident timeline summary
+
+## 7. Known Legacy / Cleanup Areas
+- `securevision_core/main.py` and `securevision_core/ui/` are a legacy Streamlit path
+- `securevision_frontend/src/components/VideoFeed.tsx` is not part of the current dashboard flow
+- `securevision_core/core_pipeline/layer2_logic.py` is legacy
+- `securevision_core/mock_models/` is not part of the current runtime
+- `securevision_core/api/main.py` still contains some duplicated/comment-heavy scaffolding that could be cleaned up
+
+## 8. Recommended Startup Path
+
+1. Start PostgreSQL
+2. Ensure the active model files are present
+3. Set:
+   - `OPENAI_API_KEY`
+   - `OPENAI_MODEL=gpt-4o-mini`
+4. Run `securevision_core/run_system.py`
+5. Run the React frontend
+6. Connect to `ws://localhost:8001/ws/stats`
