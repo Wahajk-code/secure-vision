@@ -3,7 +3,7 @@ import { X, CheckCircle, AlertTriangle, AlertOctagon, Info } from 'lucide-react'
 
 export interface ToastMessage {
     id: number;
-    type: 'success' | 'warning' | 'error' | 'info';
+    type: 'success' | 'warning' | 'error' | 'info' | 'agentic';
     title: string;
     message: string;
 }
@@ -44,6 +44,7 @@ const ToastItem: React.FC<{ toast: ToastMessage, onClose: () => void }> = ({ toa
         warning: 'bg-orange-500/10 border-orange-500/20 text-orange-200',
         error: 'bg-red-500/10 border-red-500/20 text-red-200',
         info:   'bg-blue-500/10 border-blue-500/20 text-blue-200',
+        agentic: 'bg-amber-500/10 border-amber-500/20 text-amber-100',
     };
     
     const icon = {
@@ -51,6 +52,7 @@ const ToastItem: React.FC<{ toast: ToastMessage, onClose: () => void }> = ({ toa
         warning: <AlertTriangle className="text-orange-400" size={18} />,
         error:   <AlertOctagon className="text-red-400" size={18} />,
         info:    <Info className="text-blue-400" size={18} />,
+        agentic: <AlertTriangle className="text-amber-300" size={18} />,
     };
 
     return (

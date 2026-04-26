@@ -1,5 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Camera, Maximize2, Minimize2, AlertTriangle, Shield, Cpu, Tag, Clock, Filter, Calendar } from 'lucide-react';
+import { AgenticAlertCard, type AgenticAlertPayload } from './AgenticAlertCard';
+import { OperatorActionCard } from './OperatorActionCard';
 
 interface LogEntry {
     type: 'INFO' | 'WARNING' | 'CRITICAL';
@@ -12,15 +14,23 @@ export interface CriticalImage {
     url: string;
     description: string;
     timestamp: string;
+    metadata?: {
+        camera_id?: string;
+        camera_name?: string;
+        sector?: string;
+        area?: string;
+        stream_id?: string;
+    };
 }
 
 interface StatsPanelProps {
     logs: LogEntry[]; // kept for compatibility, maybe unused visually
     fps: number;
     criticalImages?: CriticalImage[];
+    latestAgenticAlert?: AgenticAlertPayload | null;
 }
 
-export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = [] }) => {
+export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = [], latestAgenticAlert = null }) => {
     const [expandedImageId, setExpandedImageId] = useState<number | null>(null);
     const [selectedSession, setSelectedSession] = useState<'All' | 'Current Shift' | 'Previous Shift'>('All');
     const [selectedTimeline, setSelectedTimeline] = useState<'Anytime' | 'Last Hour' | 'Last 24h'>('Anytime');
@@ -33,6 +43,8 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = []
             return true; 
         });
     }, [criticalImages, selectedSession, selectedTimeline]);
+
+    const expandedImage = criticalImages.find(img => img.id === expandedImageId) || null;
 
     return (
         <div className="flex flex-col h-full bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl relative group overflow-hidden">
@@ -88,8 +100,20 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = []
                 </div>
             </div>
 
-            {/* Image Feed Grid */}
-            <div className={`flex-1 overflow-y-auto p-4 custom-scrollbar z-10 ${filteredImages.length > 0 ? 'grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 content-start gap-4 auto-rows-max' : 'flex flex-col'}`}>
+            <div className="flex-1 overflow-y-auto custom-scrollbar z-10">
+                <div className="grid gap-4 p-4">
+                    {latestAgenticAlert && latestAgenticAlert.original_event?.severity === 'CRITICAL' && (
+                        <>
+                            <AgenticAlertCard alert={latestAgenticAlert} />
+                            <OperatorActionCard
+                                actions={latestAgenticAlert.actions.action_plan || []}
+                                note={latestAgenticAlert.actions.operator_note || ''}
+                                escalationHint={latestAgenticAlert.actions.escalation_hint || ''}
+                            />
+                        </>
+                    )}
+
+                    <div className={`${filteredImages.length > 0 ? 'grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 content-start gap-4 auto-rows-max' : 'flex flex-col'}`}>
                 {filteredImages.length === 0 && (
                     <div className="text-center text-slate-500 py-10 flex flex-col items-center gap-2 opacity-50 h-full justify-center w-full col-span-2">
                         <Camera size={24} />
@@ -126,13 +150,21 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = []
                                 <AlertTriangle size={10} className="text-red-400 shrink-0" />
                                 <h3 className="text-[10px] font-bold text-white capitalize truncate">{img.description}</h3>
                             </div>
-                            <div className="flex items-center gap-1 text-slate-400 shrink-0">
-                                <Clock size={10} />
-                                <span className="text-[9px] font-mono">{img.timestamp}</span>
+                                    <div className="flex items-center gap-1 text-slate-400 shrink-0">
+                                        <Clock size={10} />
+                                        <span className="text-[9px] font-mono">{img.timestamp}</span>
+                                    </div>
+                            <div className="flex items-center gap-1 text-slate-500 shrink-0">
+                                <Camera size={10} />
+                                <span className="text-[9px] font-mono truncate">
+                                    {img.metadata?.camera_name || img.metadata?.camera_id || 'Unknown Camera'}
+                                </span>
                             </div>
                         </div>
                     </div>
                 ))}
+                    </div>
+                </div>
             </div>
 
             {/* FULL SCREEN MODAL */}
@@ -153,10 +185,10 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = []
                                 </div>
                                 <div>
                                     <h2 className="text-lg font-black text-white capitalize">
-                                        {criticalImages.find(img => img.id === expandedImageId)?.description}
+                                        {expandedImage?.description}
                                     </h2>
                                     <span className="text-xs text-slate-400 font-mono flex items-center gap-2">
-                                        <Clock size={12} /> {criticalImages.find(img => img.id === expandedImageId)?.timestamp}
+                                        <Clock size={12} /> {expandedImage?.timestamp}
                                     </span>
                                 </div>
                             </div>
@@ -171,7 +203,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = []
                         {/* Modal Image */}
                         <div className="flex-1 min-h-0 bg-black/50 overflow-hidden flex items-center justify-center p-4">
                             <img 
-                                src={criticalImages.find(img => img.id === expandedImageId)?.url} 
+                                src={expandedImage?.url} 
                                 alt="Expanded Evidence" 
                                 className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-2xl ring-1 ring-white/10"
                             />
@@ -183,7 +215,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = []
                                 <Tag size={16} className="text-slate-500" />
                                 <div>
                                     <div className="text-[10px] text-slate-500 uppercase font-black tracking-wider">Event Type</div>
-                                    <div className="text-sm text-slate-300 capitalize">{criticalImages.find(img => img.id === expandedImageId)?.description}</div>
+                                    <div className="text-sm text-slate-300 capitalize">{expandedImage?.description}</div>
                                 </div>
                             </div>
                             <div className="bg-white/5 rounded-xl p-3 flex items-center gap-3">
@@ -197,7 +229,12 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = []
                                 <Camera size={16} className="text-slate-500" />
                                 <div>
                                     <div className="text-[10px] text-slate-500 uppercase font-black tracking-wider">Source</div>
-                                    <div className="text-sm text-slate-300">Cam 01 (Main Node)</div>
+                                    <div className="text-sm text-slate-300">
+                                        {expandedImage?.metadata?.camera_name || expandedImage?.metadata?.camera_id || 'Unknown Camera'}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                        {[expandedImage?.metadata?.sector, expandedImage?.metadata?.area].filter(Boolean).join(' / ') || 'Location unavailable'}
+                                    </div>
                                 </div>
                             </div>
                         </div>

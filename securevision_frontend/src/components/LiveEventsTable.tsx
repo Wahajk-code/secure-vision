@@ -1,5 +1,7 @@
 import React from 'react';
 import { Shield, AlertTriangle, User, Package, Eye } from 'lucide-react';
+import { ActiveIncidentsPanel } from './ActiveIncidentsPanel';
+import type { AgenticIncident } from './AgenticAlertCard';
 
 export interface LiveObject {
     id: number;
@@ -10,6 +12,8 @@ export interface LiveObject {
 
 interface LiveEventsTableProps {
     objects: LiveObject[];
+    incidents?: AgenticIncident[];
+    onSelectIncident?: (incident: AgenticIncident) => void;
     camera?: {
         name: string;
         sector: string;
@@ -17,7 +21,7 @@ interface LiveEventsTableProps {
     } | null;
 }
 
-export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects, camera }) => {
+export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects, incidents = [], onSelectIncident, camera }) => {
     return (
         <div className="h-full flex flex-col relative group">
             {/* Gradient Overlay */}
@@ -48,7 +52,7 @@ export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects, camer
             </div>
             
             {/* Content */}
-            <div className="flex-1 overflow-auto p-0 custom-scrollbar z-10">
+            <div className="flex-1 min-h-0 overflow-auto p-0 custom-scrollbar z-10">
                 {objects.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-2">
                         <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center animate-pulse border border-white/5">
@@ -101,6 +105,8 @@ export const LiveEventsTable: React.FC<LiveEventsTableProps> = ({ objects, camer
                     </table>
                 )}
             </div>
+
+            <ActiveIncidentsPanel incidents={incidents} onSelectIncident={onSelectIncident} />
         </div>
     );
 };

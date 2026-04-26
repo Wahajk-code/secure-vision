@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Sidebar } from '../components/Sidebar';
 import { StatsPanel } from '../components/StatsPanel';
 import type { CriticalImage } from '../components/StatsPanel';
+import type { AgenticAlertPayload, AgenticIncident } from '../components/AgenticAlertCard';
 import { AnalyticsPanel } from '../components/AnalyticsPanel';
 import { DatabaseView } from '../components/DatabaseView';
 import type { DBEvent } from '../components/DatabaseView';
 import { LiveEventsTable } from '../components/LiveEventsTable';
 import type { LiveObject } from '../components/LiveEventsTable';
+import { IncidentDetailModal } from '../components/IncidentDetailModal';
 import { ToastContainer } from '../components/Toast';
 import type { ToastMessage } from '../components/Toast';
 import { Bell, User, LogOut } from 'lucide-react';
@@ -60,6 +62,10 @@ export const DashboardLayout = () => {
   const [notifications, setNotifications] = useState<LogEntry[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [criticalImages, setCriticalImages] = useState<CriticalImage[]>([]);
+  const [latestAgenticAlert, setLatestAgenticAlert] = useState<AgenticAlertPayload | null>(null);
+  const [activeIncidents, setActiveIncidents] = useState<AgenticIncident[]>([]);
+  const [selectedIncident, setSelectedIncident] = useState<AgenticIncident | null>(null);
+  const lastCriticalIncidentSeenRef = useRef<Record<string, number>>({});
   
   // Charts & DB State (Analytics Tab)
   const [chartData, setChartData] = useState<ChartDataPoint[]>(() => {
@@ -155,7 +161,7 @@ export const DashboardLayout = () => {
   const [ws, setWs] = useState<WebSocket | null>(null);
 
   // Toast Helper
-  const addToast = useCallback((type: 'success' | 'warning' | 'error' | 'info', title: string, message: string) => {
+  const addToast = useCallback((type: ToastMessage['type'], title: string, message: string) => {
       setToasts(prev => {
           // Anti-Spam: Check if identical toast exists
           const exists = prev.some(t => t.message === message && t.title === title);
@@ -199,6 +205,27 @@ export const DashboardLayout = () => {
                      return;
                  }
 
+                 if (data.type === 'AGENTIC_ALERT' && data.incident && data.triage && data.actions) {
+                     const agentic = data as AgenticAlertPayload;
+                     if (agentic.original_event?.severity !== 'CRITICAL') {
+                         return;
+                     }
+                     const incidentId = agentic.incident.incident_id;
+                     const nowTs = Date.now();
+                     const lastSeen = lastCriticalIncidentSeenRef.current[incidentId] || 0;
+                     if (nowTs - lastSeen < 8000) {
+                         return;
+                     }
+                     lastCriticalIncidentSeenRef.current[incidentId] = nowTs;
+                     setLatestAgenticAlert(agentic);
+                     setActiveIncidents(prev => {
+                         const filtered = prev.filter(item => item.incident_id !== agentic.incident.incident_id);
+                         return [agentic.incident, ...filtered].slice(0, 8);
+                     });
+                     addToast('agentic', agentic.triage.dashboard_title, agentic.actions.operator_note || agentic.triage.operator_summary);
+                     return;
+                 }
+
                  // 2. FPS
                  if (data.fps) {
                      setFps(data.fps);
@@ -231,11 +258,20 @@ export const DashboardLayout = () => {
                  
                  // 4. Critical Images Structure
                  if (data.type === 'CRITICAL_IMAGE') {
+                     const fallbackCamera = currentCamera ? {
+                         camera_name: currentCamera.name,
+                         sector: currentCamera.sector,
+                         area: currentCamera.area,
+                     } : {};
                      const imageEntry: CriticalImage = {
                          id: Date.now(),
                          url: data.image_url,
                          description: data.message,
-                         timestamp: data.timestamp
+                         timestamp: data.timestamp,
+                         metadata: {
+                             ...fallbackCamera,
+                             ...(data.metadata || {}),
+                         },
                      };
                      setCriticalImages(prev => [imageEntry, ...prev].slice(0, 10)); // Keep last 10
                  }
@@ -301,6 +337,7 @@ export const DashboardLayout = () => {
       <div className="absolute top-0 left-0 w-full h-full bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-30 z-0 pointer-events-none mix-blend-overlay" />
       
       <ToastContainer toasts={toasts} removeToast={removeToast} />
+      <IncidentDetailModal incident={selectedIncident} onClose={() => setSelectedIncident(null)} />
       
       {/* Sidebar */}
       <div className="relative z-10 h-full border-r border-orange-500/10 bg-black/40 backdrop-blur-xl">
@@ -387,18 +424,23 @@ export const DashboardLayout = () => {
                 <div className="flex-1 grid grid-cols-2 gap-4 h-full p-4 overflow-hidden">
                     {/* Left: Live Events */}
                     <div className="bg-black/20 border border-white/5 rounded-3xl backdrop-blur-sm overflow-hidden shadow-2xl">
-                        <LiveEventsTable objects={liveObjects} camera={currentCamera} />
+                        <LiveEventsTable
+                            objects={liveObjects}
+                            incidents={activeIncidents}
+                            onSelectIncident={setSelectedIncident}
+                            camera={currentCamera}
+                        />
                     </div>
                     
                     {/* Right: Stats Panel */}
                     <div className="bg-black/20 border border-white/5 rounded-3xl backdrop-blur-sm overflow-hidden shadow-2xl p-1 flex flex-col">
-                            <StatsPanel logs={logs} fps={fps} criticalImages={criticalImages} />
+                            <StatsPanel logs={logs} fps={fps} criticalImages={criticalImages} latestAgenticAlert={latestAgenticAlert} />
                     </div>
                 </div>
             ) : activeTab === 'screenshots' ? (
                 <div className="flex-1 w-full h-full p-4 overflow-hidden">
                     <div className="bg-black/20 border border-white/5 rounded-3xl backdrop-blur-sm overflow-hidden shadow-2xl p-1 flex flex-col h-full w-full">
-                         <StatsPanel logs={logs} fps={fps} criticalImages={criticalImages} />
+                         <StatsPanel logs={logs} fps={fps} criticalImages={criticalImages} latestAgenticAlert={latestAgenticAlert} />
                     </div>
                 </div>
             ) : (
