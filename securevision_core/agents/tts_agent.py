@@ -13,10 +13,18 @@ logger = setup_logger(__name__)
 class TTSAgent:
     """Non-blocking text-to-speech queue with cooldowns and optional pyttsx3."""
 
-    def __init__(self, cooldown_seconds: float = 5.0, enabled: bool = True):
+    def __init__(
+        self,
+        cooldown_seconds: float = 5.0,
+        critical_cooldown_seconds: float = 8.0,
+        fight_critical_cooldown_seconds: float = 10.0,
+        enabled: bool = True,
+    ):
         self.cooldown_seconds = cooldown_seconds
+        self.critical_cooldown_seconds = critical_cooldown_seconds
+        self.fight_critical_cooldown_seconds = fight_critical_cooldown_seconds
         self.enabled = enabled
-        self._last_spoken: Dict[Tuple[str, str, str], float] = {}
+        self._last_spoken: Dict[Tuple[str, str, str, str, str, str], float] = {}
         self._queue: "queue.PriorityQueue[tuple[int, float, tuple, str]]" = queue.PriorityQueue()
         self._pending_messages = set()
         self._speaking_messages = set()
@@ -34,20 +42,43 @@ class TTSAgent:
             return False
 
         metadata = decision.metadata or {}
-        key = (
-            decision.event_type,
-            str(metadata.get("track_id") or metadata.get("ids") or "global"),
-            decision.severity,
-        )
+        camera_key = str(metadata.get("camera_id") or metadata.get("camera_name") or "camera")
+        sector_key = str(metadata.get("sector") or "")
+        area_key = str(metadata.get("area") or "")
+        subtype_key = str(getattr(decision, "subtype", metadata.get("subtype") or "generic"))
+        severity_key = str(decision.severity).upper()
+        if str(decision.event_type).upper() == "FIGHT" and severity_key == "CRITICAL":
+            key = (
+                decision.event_type,
+                subtype_key,
+                severity_key,
+                camera_key,
+                "",
+                "",
+            )
+            active_cooldown = self.fight_critical_cooldown_seconds
+        else:
+            key = (
+                decision.event_type,
+                subtype_key,
+                severity_key,
+                camera_key,
+                sector_key,
+                area_key,
+            )
+            active_cooldown = self.critical_cooldown_seconds if severity_key == "CRITICAL" else self.cooldown_seconds
         now = time.time()
         last = self._last_spoken.get(key, 0)
-        if now - last < self.cooldown_seconds:
+        if now - last < active_cooldown:
             logger.debug(
-                "[TTS cooldown] event=%s target=%s severity=%s next_repeat_in=%.1fs",
+                "[TTS cooldown] event=%s subtype=%s severity=%s location=%s/%s/%s next_repeat_in=%.1fs",
                 key[0],
                 key[1],
                 key[2],
-                self.cooldown_seconds - (now - last),
+                key[3],
+                key[4],
+                key[5],
+                active_cooldown - (now - last),
             )
             return False
 

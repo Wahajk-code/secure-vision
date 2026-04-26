@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
+from config import WEAPON_CONFIRMATION_FRAMES
 
 
 @dataclass
@@ -73,7 +74,7 @@ class AlertRuleEngine:
 
     def _evaluate_weapon(self, event: Dict[str, Any]) -> AlertDecision:
         subtype = str(event.get("subtype") or event.get("class") or "weapon").lower()
-        frames_seen = int(event.get("frames_seen", 10) or 0)
+        frames_seen = int(event.get("frames_seen", WEAPON_CONFIRMATION_FRAMES) or 0)
         confidence = float(event.get("confidence", 0.0) or 0.0)
         person_present = bool(event.get("person_present", True))
         location = self._format_location(event)
@@ -84,7 +85,7 @@ class AlertRuleEngine:
         if not person_present:
             base -= 25
 
-        required_frames = 8 if subtype == "knife" else 10
+        required_frames = 8 if subtype == "knife" else WEAPON_CONFIRMATION_FRAMES
         if frames_seen < required_frames:
             score = max(55, base - 30)
             severity = "WARNING"
@@ -162,7 +163,7 @@ class AlertRuleEngine:
             action = "Send nearest guard for visual confirmation and continue camera tracking."
             dashboard = f"Possible fight behavior detected at {location}. Supervisor verification recommended."
             spoken = f"Possible fight at {location}. Verify scene."
-            should_speak = False
+            should_speak = True
         else:
             severity = "INFO"
             risk_level = "LOW"
@@ -203,7 +204,7 @@ class AlertRuleEngine:
             state = "ABANDONED_CONFIRMED"
             action = "Clear the nearby area, do not touch the object, notify the supervisor, and follow suspicious package protocol."
             dashboard = f"Abandoned luggage confirmed at {location}. Clear the area and follow suspicious package protocol."
-            spoken = f"Critical abandoned luggage at {location}. Clear area. Do not touch."
+            spoken = f"Critical abandoned luggage at {location}."
             should_speak = True
         elif seconds_left is not None:
             severity = "WARNING"
@@ -214,7 +215,7 @@ class AlertRuleEngine:
             action = "Ask the nearest guard to verify ownership from a safe distance and continue monitoring."
             dashboard = f"Possible unattended luggage at {location}. Ownership verification recommended."
             spoken = f"Possible unattended luggage at {location}. Verify ownership."
-            should_speak = False
+            should_speak = True
         else:
             severity = "INFO"
             risk_level = "LOW"

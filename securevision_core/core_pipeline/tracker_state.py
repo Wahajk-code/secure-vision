@@ -119,6 +119,7 @@ class TrackerState:
                 self.tracks[tid] = {
                     'bbox': deque(maxlen=self.history_len),
                     'centroid': deque(maxlen=self.history_len),
+                    'confidence': deque(maxlen=self.history_len),
                     'class': det['class'],
                     'last_seen': frame_number,
                     'is_abandoned_event_triggered': False
@@ -126,6 +127,7 @@ class TrackerState:
             
             self.tracks[tid]['bbox'].append(det['bbox'])
             self.tracks[tid]['centroid'].append(det['centroid'])
+            self.tracks[tid]['confidence'].append(det.get('confidence', 0.0))
             self.tracks[tid]['last_seen'] = frame_number
 
         # Optional: Clean up old tracks (not strictly required for this demo but good practice)

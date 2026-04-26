@@ -3,6 +3,7 @@ import time
 from datetime import datetime
 import psycopg2
 from config import DB_CONFIG
+from config import WEAPON_CONFIRMATION_FRAMES
 from agents.alert_rules import AlertRuleEngine
 from utils.camera_registry import CameraRegistry
 
@@ -26,7 +27,7 @@ class StatsManager:
             event_type (str): 'WEAPON', 'FIGHT', 'ABANDONED_LUGGAGE'
             details (dict): Optional details like {'class': 'gun', 'track_id': 1}
         """
-        details = self._enrich_details(event_type, details or {})
+        details = self._sanitize_for_json(self._enrich_details(event_type, details or {}))
         conn = self._get_connection()
         if not conn: return
 
@@ -51,6 +52,21 @@ class StatsManager:
         except Exception as e:
             print(f"Error logging stats to DB: {e}")
 
+    def _sanitize_for_json(self, value):
+        """
+        Converts numpy / exotic numeric values into plain Python JSON-safe values.
+        """
+        if isinstance(value, dict):
+            return {str(k): self._sanitize_for_json(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize_for_json(v) for v in value]
+        if hasattr(value, "item"):
+            try:
+                return value.item()
+            except Exception:
+                pass
+        return value
+
     def _enrich_details(self, event_type, details):
         """
         Stores deterministic alert interpretation with every event so summaries
@@ -63,7 +79,7 @@ class StatsManager:
         normalized["event_type"] = event_type
         if event_type == "WEAPON":
             normalized["subtype"] = str(details.get("class", details.get("subtype", "weapon"))).lower()
-            normalized.setdefault("frames_seen", 10)
+            normalized.setdefault("frames_seen", WEAPON_CONFIRMATION_FRAMES)
             normalized.setdefault("person_present", True)
         elif event_type == "FIGHT":
             normalized["subtype"] = "physical_altercation"

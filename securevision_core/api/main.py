@@ -8,7 +8,7 @@ import time
 import os
 import json
 import logging
-from typing import List
+from typing import Any, Dict, List
 from pydantic import BaseModel
 
 # Add parent dir to path to import securevision_core modules
@@ -115,9 +115,9 @@ def broadcast_log_sync(log_entry):
 # OK, let's use a shared Queue.
 
 import queue
-log_queue = queue.Queue()
+log_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
 
-def broadcast_log_sync(log_entry):
+def broadcast_log_sync(log_entry: Dict[str, Any]):
     log_queue.put(log_entry)
 
 @app.websocket("/ws/stats")

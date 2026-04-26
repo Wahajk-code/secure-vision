@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from config import SUSTAINED_DURATION_FRAMES, WEAPON_CLASSES
+from config import SUSTAINED_DURATION_FRAMES, WEAPON_CLASSES, WEAPON_CONFIRMATION_FRAMES
 from core_pipeline.tracker_state import TrackerState
 from core_pipeline.real_layer1 import get_yolo_detections
 from utils.logger import setup_logger
@@ -113,7 +113,7 @@ class SecureVisionPipeline:
         luggage_dashboard_data = []
 
         # Annotation
-        from config import ABANDONED_DURATION_FRAMES, LUGGAGE_CLASSES, GHOST_FRAMES_WEAPON, GHOST_FRAMES_LUGGAGE, GHOST_FRAMES_PERSON
+        from config import ABANDONED_DURATION_FRAMES, LUGGAGE_WARNING_DELAY_FRAMES, LUGGAGE_CLASSES, GHOST_FRAMES_WEAPON, GHOST_FRAMES_LUGGAGE, GHOST_FRAMES_PERSON
         
         # Get all updated tracks to access metadata like owner_id
         all_tracks = self.tracker_state.get_all_tracks()
@@ -168,7 +168,8 @@ class SecureVisionPipeline:
                 "id": tid,
                 "category": display_cls,
                 "status": "Normal",
-                "details": "Tracking"
+                "details": "Tracking",
+                "confidence": float(track['confidence'][-1]) if track.get('confidence') and len(track['confidence']) > 0 else 0.0,
             }
             if is_ghost:
                 obj_data["details"] = "Tracking (Lost)"
@@ -184,8 +185,8 @@ class SecureVisionPipeline:
                     
                 frames_seen = len(track['bbox'])
                 
-                # Debounce: Require at least 10 frames of tracking to confirm it's a real weapon and not a glitch
-                if frames_seen >= 10:
+                # Debounce: require a longer track window before weapon confirmation.
+                if frames_seen >= WEAPON_CONFIRMATION_FRAMES:
                     current_color = (0, 0, 255) # Red for Weapon (BGR)
                     
                     # Flag as critical immediately
@@ -202,7 +203,7 @@ class SecureVisionPipeline:
                 else:
                     current_color = (0, 165, 255) # Orange for verification
                     obj_data["status"] = "WARNING"
-                    obj_data["details"] = f"Verifying ({frames_seen}/10)"
+                    obj_data["details"] = f"Verifying ({frames_seen}/{WEAPON_CONFIRMATION_FRAMES})"
 
             # Luggage Logic
             elif cls in LUGGAGE_CLASSES:
@@ -217,7 +218,7 @@ class SecureVisionPipeline:
                     label_suffix += f" (Owner: {owner_id})" # Always show owner ID
                 
                 timer_display = "Safe"
-                if abandoned_timer > 0:
+                if abandoned_timer >= LUGGAGE_WARNING_DELAY_FRAMES:
                     frames_left = ABANDONED_DURATION_FRAMES - abandoned_timer
                     if frames_left > 0:
                         timer_display = f"⚠️ {frames_left / 30:.1f}s"
@@ -284,7 +285,7 @@ class SecureVisionPipeline:
                 
             elif cls in LUGGAGE_CLASSES:
                 obj_data["details"] = f"Owner: {owner_id if owner_id is not None else 'None'}"
-                if abandoned_timer > 0:
+                if abandoned_timer >= LUGGAGE_WARNING_DELAY_FRAMES:
                     frames_left = ABANDONED_DURATION_FRAMES - abandoned_timer
                     if frames_left > 0:
                         obj_data["details"] = f"⚠️ Abandoning in {frames_left / 30:.1f}s"

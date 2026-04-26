@@ -31,6 +31,7 @@ BASE_CLASSES = ['person', 'suitcase', 'handbag', 'backpack']
 # Custom Trained Classes (Weapon Model)
 WEAPON_CLASSES = ['Gun', 'rifle', 'gun'] # Adding both cases to be safe
 LUGGAGE_CLASSES = ['backpack', 'handbag', 'suitcase']
+WEAPON_CONFIRMATION_FRAMES = 15
 
 # Per-Class Confidence Thresholds
 CONFIDENCE_THRESHOLDS = {
@@ -51,7 +52,8 @@ MAX_WEAPON_BBOX_HEIGHT_RATIO = 0.55 # Max 55% of the screen height.
 MAX_WEAPON_BBOX_WIDTH_RATIO = 0.55 # Max 55% of the screen width.
 
 # Luggage Abandonment Logic
-ABANDONED_DURATION_FRAMES = 150  # 5 seconds at 30 FPS
+ABANDONED_DURATION_FRAMES = 300  # 10 seconds at 30 FPS
+LUGGAGE_WARNING_DELAY_FRAMES = 90  # 3 seconds before showing unattended warning
 LUGGAGE_PROXIMITY_THRESHOLD = 200 # Pixels (approx 1-2 meters depending on depth)
 GHOST_FRAMES_WEAPON = 0    # Instantly drop weapons to avoid false positive blips
 GHOST_FRAMES_LUGGAGE = 30  # Keep luggage boxes for 1 second if occluded by pedestrians

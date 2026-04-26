@@ -12,3 +12,4 @@ passlib[bcrypt]
 bcrypt
 sqlalchemy
 pyttsx3
+openai

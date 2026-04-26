@@ -16,11 +16,16 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET", "N7yJns6wD_yB10E1v73f7mIFXU4")
 )
 
-def _upload_worker(frame, description, timestamp):
+def _upload_worker(frame, description, timestamp, metadata=None):
     """
     Background worker that saves the frame to disk, uploads it to Cloudinary,
     and then broadcasts the resulting secure URL to the React frontend.
     """
+    metadata = metadata or {}
+    camera_name = str(metadata.get("camera_name") or metadata.get("camera_id") or "Camera 1")
+    sector = str(metadata.get("sector") or "")
+    area = str(metadata.get("area") or "")
+    stream_id = str(metadata.get("stream_id") or "")
     try:
         # Create a temporary file
         temp_filename = f"temp_evidence_{int(time.time())}.jpg"
@@ -32,7 +37,14 @@ def _upload_worker(frame, description, timestamp):
         response = cloudinary.uploader.upload(
             temp_filename, 
             folder="securevision_evidence",
-            resource_type="image"
+            resource_type="image",
+            context={
+                "description": description,
+                "camera_name": camera_name,
+                "sector": sector,
+                "area": area,
+                "stream_id": stream_id,
+            },
         )
         
         secure_url = response.get('secure_url')
@@ -47,13 +59,20 @@ def _upload_worker(frame, description, timestamp):
             "type": "CRITICAL_IMAGE",
             "image_url": secure_url,
             "message": description,
-            "timestamp": timestamp
+            "timestamp": timestamp,
+            "metadata": {
+                "camera_id": metadata.get("camera_id"),
+                "camera_name": camera_name,
+                "sector": sector,
+                "area": area,
+                "stream_id": stream_id,
+            },
         })
         
     except Exception as e:
         logger.error(f"[Cloudinary] Upload failed: {e}")
 
-def upload_image_async(frame, description, timestamp):
+def upload_image_async(frame, description, timestamp, metadata=None):
     """
     Spawns a background thread to upload a critical frame to Cloudinary
     without blocking the real-time AI computer vision loop.
@@ -63,7 +82,7 @@ def upload_image_async(frame, description, timestamp):
     
     thread = threading.Thread(
         target=_upload_worker, 
-        args=(frame_bgr, description, timestamp), 
+        args=(frame_bgr, description, timestamp, metadata), 
         daemon=True
     )
     thread.start()

@@ -1,67 +1,90 @@
-# SecureVision Final Defense System
+# SecureVision Core
 
-SecureVision is a comprehensive video analytics dashboard designed for public safety monitoring. It integrates multiple AI layers to detect weapons, fights, and abandoned luggage in real-time.
+`securevision_core` contains the active backend runtime, AI pipeline, alerting logic, database access, and legacy Streamlit UI files.
 
-**New Architecture**:
-- **Backend**: FastAPI (Python) for video streaming and AI logic.
-- **Frontend**: React (Vite + TypeScript) for a premium, responsive UI.
+## Active Runtime
+The current integrated runtime path is:
 
-## Features
+- `run_system.py`
+- `api/main.py`
+- `core_pipeline/pipeline.py`
 
-- **Live Monitoring**: Real-time video processing with visual annotations.
-- **Weapon Detection**: Identifies guns and knives using YOLOv8.
-- **Fight Detection**: Analyzing behavioral patterns to detect physical altercations.
-- **Abandoned Luggage**: Tracks luggage owner proximity and detects abandonment after a set duration.
-- **Real-time Analytics**: WebSocket-based event logging and FPS monitoring.
+`run_system.py` is the recommended entrypoint. It:
 
-## Prerequisites
+- starts FastAPI on port `8001`
+- runs the mixed local video playlist
+- processes frames through the AI pipeline
+- evaluates alerts with deterministic rules
+- queues TTS
+- submits qualifying incidents to the agentic layer
+- uploads critical evidence to Cloudinary
+- broadcasts results over `ws://localhost:8001/ws/stats`
 
-- **Python 3.8+**
-- **Node.js & npm**
-- **Virtual Environment** (Recommended)
+## Main Components
 
-## Installation & Usage
+### Core Pipeline
+- `core_pipeline/real_layer1.py`: YOLO detection/tracking
+- `core_pipeline/tracker_state.py`: history and luggage ownership
+- `core_pipeline/fight_detector.py`: active fight path
+- `core_pipeline/pose_filter.py`: pose ROI verification
+- `core_pipeline/fightnet_integration.py`: FightNet confirmation
+- `core_pipeline/reid_manager.py`: person re-identification
+- `core_pipeline/pipeline.py`: orchestration
 
-You need to run the **Backend** and **Frontend** in separate terminals.
+### Alerting And Agents
+- `agents/event_normalizer.py`: pipeline event normalization
+- `agents/alert_rules.py`: deterministic severity, score, and messaging
+- `agents/tts_agent.py`: spoken alert queue/cooldowns
+- `agents/slm_service.py`: OpenAI strict-JSON wrapper
+- `agents/operations_agent_layer.py`: triage/timeline/actions orchestration
 
-### 1. Backend (FastAPI)
+### API And Utilities
+- `api/main.py`: WebSocket and REST endpoints
+- `utils/stats_manager.py`: PostgreSQL event logging
+- `utils/camera_registry.py`: camera metadata
+- `utils/cloudinary_helper.py`: evidence upload
+- `utils/logger.py`: logging
 
-```bash
+## Important Notes
+- the active dashboard is the React frontend in `securevision_frontend`
+- `main.py` and `ui/` represent a legacy Streamlit path
+- `core_pipeline/layer2_logic.py` is not the active fight path
+- `src/components/VideoFeed.tsx` in the frontend is not part of the current runtime flow and still references an older MJPEG endpoint
+
+## Startup
+
+### Backend
+```powershell
 cd securevision_core
-# Activate Virtual Environment (if not active)
-.\venv\Scripts\Activate.ps1
-# Install Dependencies (First time only)
-pip install -r requirements.txt
-# Run Server
-python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+.\venv\Scripts\python.exe run_system.py
 ```
-The API will run at `http://localhost:8000`.
 
-### 2. Frontend (React)
+### Required Environment
+Important environment variables include:
 
-```bash
-cd securevision_frontend
-# Install Dependencies (First time only)
-npm install
-# Run Dev Server
-npm run dev
-```
-The Dashboard will launch at `http://localhost:5173`.
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL=gpt-4o-mini`
+- PostgreSQL connection settings loaded through `config.py` / `.env`
+- Cloudinary credentials if evidence upload is enabled
 
-## Configuration
+## API
 
-Settings can be adjusted in `securevision_core/config.py`:
-- `VIDEO_PATH`: Path to input video.
-- `PROCESSING_WIDTH`: Resolution for AI inference (Default: 640).
-- `DISPLAY_WIDTH`: Resolution for display (Frontend assumes 100% width).
+### WebSocket
+- `ws://localhost:8001/ws/stats`
 
-## System Architecture
+### REST
+- `GET /api/stats`
+- `GET /api/summary/daily`
+- `GET /api/cameras`
+- `PUT /api/cameras`
+- `POST /auth/login`
+- `POST /auth/signup`
+- `DELETE /users/me`
 
-### Backend (`securevision_core/`)
--   **`api/main.py`**: Entry point. Serves MJPEG stream (`/video_feed`) and WebSockets (`/ws/stats`).
--   **`core_pipeline/`**: Contains YOLO model (`model.track`), Tracker Logic, and Event detection.
+## Models In Use
+The active code path references:
 
-### Frontend (`securevision_frontend/`)
--   Built with **React**, **TypeScript**, and **Tailwind CSS**.
--   **`VideoFeed.tsx`**: Consumes the MJPEG stream.
--   **`StatsPanel.tsx`**: Connects to WebSocket for real-time logs.
+- `models/yolo11n.pt`
+- `models/weapon_detection4.pt`
+- `models/pose26n.pt`
+- `models/fightnet_best_model.pt`

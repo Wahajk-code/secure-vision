@@ -9,12 +9,14 @@ import signal
 import sys
 import sys
 import queue
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List
 
 from api.main import app, broadcast_log_sync
 from config import VIDEO_PATH, PROCESSING_WIDTH
 from agents.alert_rules import AlertRuleEngine
 from agents.event_normalizer import normalize_pipeline_item
+from agents.operations_agent_layer import OperationsAgentLayer
 from agents.tts_agent import TTSAgent
 from core_pipeline.pipeline import SecureVisionPipeline
 from utils.logger import setup_logger
@@ -87,12 +89,17 @@ class VideoReaderThread(threading.Thread):
 # incident quickly so a new instance is not swallowed by stale cooldown.
 alert_states = {}
 ALERT_REPEAT_SECONDS = 5.0
+ALERT_REPEAT_SECONDS_CRITICAL = 8.0
 ALERT_PERSISTENCE_SECONDS = 2.0
 
 alert_rules = AlertRuleEngine()
+operations_agent_layer = OperationsAgentLayer()
 camera_registry = CameraRegistry()
 tts_agent = TTSAgent(cooldown_seconds=5.0, enabled=os.getenv("SECUREVISION_TTS_ENABLED", "1") != "0")
 alert_group_sent = {}
+agentic_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agentic")
+pending_agentic_groups = set()
+pending_agentic_lock = threading.Lock()
 
 
 def build_alert_key(camera_id, decision, raw_event):
@@ -104,17 +111,35 @@ def build_alert_key(camera_id, decision, raw_event):
 
 def build_alert_group_key(camera_id, decision, raw_event):
     """
-    Suppress related weapon detections in the same camera/place for 5 seconds.
-    Fight and luggage alerts remain instance-specific.
+    Suppress repeated alerts for the same class/event in the same camera/location,
+    even if tracker IDs churn between frames.
     """
-    if decision.event_type == "WEAPON":
-        location = "|".join([
-            str(raw_event.get("camera_id") or camera_id),
-            str(raw_event.get("sector") or ""),
-            str(raw_event.get("area") or ""),
-        ])
-        return f"{location}:{decision.event_type}:{decision.subtype}:{decision.severity}"
-    return build_alert_key(camera_id, decision, raw_event)
+    location = "|".join([
+        str(raw_event.get("camera_id") or camera_id),
+        str(raw_event.get("sector") or ""),
+        str(raw_event.get("area") or ""),
+    ])
+    return f"{location}:{decision.event_type}:{decision.subtype}:{decision.severity}"
+
+
+def submit_agentic_alert(raw_event, decision, alert_key, group_key):
+    with pending_agentic_lock:
+        if group_key in pending_agentic_groups:
+            logger.debug("[AGENTIC SKIPPED] key=%s group=%s reason=pending", alert_key, group_key)
+            return
+        pending_agentic_groups.add(group_key)
+
+    def _worker():
+        try:
+            agentic_payload = operations_agent_layer.process_event(raw_event, decision)
+            broadcast_log_sync(agentic_payload)
+        except Exception as exc:
+            logger.warning("[AGENTIC ALERT FALLBACK] key=%s error=%s", alert_key, exc)
+        finally:
+            with pending_agentic_lock:
+                pending_agentic_groups.discard(group_key)
+
+    agentic_executor.submit(_worker)
 
 
 def handle_operational_alert(item, stream_id="desktop_stream", camera_id="cam_01"):
@@ -138,12 +163,13 @@ def handle_operational_alert(item, stream_id="desktop_stream", camera_id="cam_01
     state["last_seen"] = current_time
 
     last_sent = alert_group_sent.get(group_key, 0)
-    if current_time - last_sent <= ALERT_REPEAT_SECONDS:
+    repeat_window = ALERT_REPEAT_SECONDS_CRITICAL if str(decision.severity).upper() == "CRITICAL" else ALERT_REPEAT_SECONDS
+    if current_time - last_sent <= repeat_window:
         logger.debug(
             "[ALERT SUPPRESSED] key=%s group=%s next_repeat_in=%.1fs",
             alert_key,
             group_key,
-            ALERT_REPEAT_SECONDS - (current_time - last_sent)
+            repeat_window - (current_time - last_sent)
         )
         return alert_key
 
@@ -160,6 +186,8 @@ def handle_operational_alert(item, stream_id="desktop_stream", camera_id="cam_01
     )
 
     broadcast_log_sync(decision.to_websocket_payload())
+    submit_agentic_alert(raw_event, decision, alert_key, group_key)
+
     speech_queued = tts_agent.enqueue_decision(decision)
     if speech_queued:
         logger.info("[TTS QUEUED] key=%s speech=%s", alert_key, decision.spoken_message)
@@ -270,7 +298,18 @@ def main():
         def on_critical_capture(frame_to_upload, description):
             # Send current time for metadata
             timestamp = time.strftime("%H:%M:%S")
-            upload_image_async(frame_to_upload, description, timestamp)
+            upload_image_async(
+                frame_to_upload,
+                description,
+                timestamp,
+                metadata={
+                    "camera_id": camera.get("id"),
+                    "camera_name": camera.get("name"),
+                    "sector": camera.get("sector"),
+                    "area": camera.get("area"),
+                    "stream_id": f"desktop_stream_{camera_id}",
+                },
+            )
             
         # Run Heavy Pipeline
         annotated_frame, status, log_data = pipeline.process_frame(frame_small, frame_count, capture_callback=on_critical_capture)

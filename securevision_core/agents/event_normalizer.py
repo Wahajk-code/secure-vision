@@ -1,6 +1,7 @@
 import re
 import time
 from typing import Any, Dict
+from config import WEAPON_CONFIRMATION_FRAMES
 
 
 def normalize_pipeline_item(item: Dict[str, Any], stream_id: str = "desktop_stream", camera: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -29,6 +30,7 @@ def normalize_pipeline_item(item: Dict[str, Any], stream_id: str = "desktop_stre
         "category": category,
         "status": status,
         "details": details,
+        "confidence": item.get("confidence"),
         "stream": stream_id,
         "timestamp": time.strftime("%H:%M:%S"),
     }
@@ -46,7 +48,7 @@ def normalize_pipeline_item(item: Dict[str, Any], stream_id: str = "desktop_stre
         if match:
             event["frames_seen"] = int(match.group(1))
         elif status.upper() == "CRITICAL":
-            event["frames_seen"] = 10
+            event["frames_seen"] = WEAPON_CONFIRMATION_FRAMES
 
     if event_type == "FIGHT":
         velocity = re.search(r"V:([0-9.]+)", details)
