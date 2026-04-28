@@ -37,7 +37,9 @@ export const Settings = () => {
     useEffect(() => {
         const fetchCameras = async () => {
             try {
-                const res = await fetch('http://localhost:8001/api/cameras');
+                const res = await fetch('http://localhost:8001/api/cameras', {
+                    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+                });
                 if (res.ok) {
                     const data = await res.json();
                     setCameras(data.cameras || []);
@@ -49,7 +51,7 @@ export const Settings = () => {
             }
         };
         fetchCameras();
-    }, []);
+    }, [token]);
 
     const handleDeleteAccount = async () => {
         if (!window.confirm("ARE YOU SURE? This action cannot be undone.")) return;
@@ -85,7 +87,10 @@ export const Settings = () => {
         try {
             const res = await fetch('http://localhost:8001/api/cameras', {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                },
                 body: JSON.stringify({ cameras })
             });
             if (res.ok) {

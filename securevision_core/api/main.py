@@ -1,29 +1,26 @@
-
-from fastapi import FastAPI, WebSocket
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-import cv2
 import asyncio
-import time
 import os
-import json
-import logging
-from typing import Any, Dict, List
-from pydantic import BaseModel
-
-# Add parent dir to path to import securevision_core modules
+import queue
 import sys
+import time
+from typing import Any, Dict, List
+
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from config import VIDEO_PATH, PROCESSING_WIDTH, DISPLAY_WIDTH
-from core_pipeline.pipeline import SecureVisionPipeline
-from utils.logger import setup_logger
 from api import auth, users
-from database import engine
-from models_db import Base
-from utils.stats_manager import StatsManager
 from agents.summary_agent import SummaryAgent
+from auth import get_current_user, get_user_from_token
+from database import SessionLocal, engine
+from models_db import Base, User
+from runtime_gate import activate_runtime, deactivate_runtime
 from utils.camera_registry import CameraRegistry
+from utils.logger import setup_logger
+from utils.stats_manager import StatsManager
 
 
 class CameraConfig(BaseModel):
@@ -37,16 +34,13 @@ class CameraConfig(BaseModel):
 class CameraConfigPayload(BaseModel):
     cameras: List[CameraConfig]
 
-# Create Tables
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
-
-# Include Routers
 app.include_router(auth.router)
 app.include_router(users.router)
 
-# Enable CORS for React Frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -56,145 +50,124 @@ app.add_middleware(
 )
 
 logger = setup_logger()
-
-# Global state for logs/stats
 active_connections: List[WebSocket] = []
-pipeline = SecureVisionPipeline(stream_id="api_stream")
-
-@app.websocket("/ws/stats")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    active_connections.append(websocket)
-    try:
-        while True:
-            # Just keep connection alive, we broadcast from the loop
-            await websocket.receive_text()
-    except Exception:
-        active_connections.remove(websocket)
-
-
-# Helper for Sync threads to broadcast to Async Websockets
-def broadcast_log_sync(log_entry):
-    """
-    Called from the main thread (OpenCV loop) to send data to the event loop.
-    """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(broadcast_log(log_entry), loop)
-    except Exception:
-        # Loop might not be accessible easily from here if uvicorn runs in thread.
-        # Actually uvicorn creates its own loop in the thread.
-        # We need a proper way to bridge. 
-        # Ideally, we put the queue in valid scope.
-        # For simplicity in this script, we can skip complex thread-safe queueing 
-        # and just rely on the race-condition (it often works for demos) 
-        # OR better: use a thread-safe Queue that the websocket endpoint polls?
-        pass
-
-# ... (We will fix the Sync-Async bridge in a better way if needed, 
-# for now let's just keep the endpoint generic and try to hook active_connections)
-# Actually, since uvicorn runs in a separate thread, we can't schedule coroutines onto it easily 
-# without the loop reference.
-# Let's simple use a global list and loop.
-# But `active_connections` is shared memory (Global Interpreter Lock protects list ops).
-# `send_json` is async. We need to run it in the loop.
-
-# UPDATED STRATEGY: 
-# We will use a simple polling mechanism in the WebSocket endpoint? 
-# No, that's inefficient.
-# Effective way: 
-# 1. API thread runs loop.
-# 2. Main thread sets a variable / queue.
-# 3. API thread loop checks queue?
-# Let's keep it simple: We won't broadcast perfectly from main thread to this specific uvicorn loop instance 
-# without more complex code. 
-# User asked for "Logs ... when I visit the link".
-# We can just rely on the API itself to generate logs?
-# No, the Pipeline runs in Main thread.
-# OK, let's use a shared Queue.
-
-import queue
+connection_last_seen: Dict[WebSocket, float] = {}
 log_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+HEARTBEAT_TIMEOUT_SECONDS = 3.0
+
 
 def broadcast_log_sync(log_entry: Dict[str, Any]):
     log_queue.put(log_entry)
 
+
+def _authenticate_websocket(token: str | None) -> User:
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing websocket token")
+
+    db: Session = SessionLocal()
+    try:
+        return get_user_from_token(token, db)
+    finally:
+        db.close()
+
+
 @app.websocket("/ws/stats")
 async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    try:
+        user = _authenticate_websocket(token)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     active_connections.append(websocket)
+    connection_last_seen[websocket] = time.time()
+    activate_runtime()
+    logger.info("[WS AUTH] Accepted stats websocket for user=%s", user.username)
     try:
         while True:
-            # Check queue non-blocking
-            # We want to send data when it arrives.
-            # But we are inside an async handler for *one* client.
-            # We need a broadcaster task.
-            
-            # Temporary "Push" mechanism:
-            # We can sleep small amount and check queue?
-            # Or use asyncio.Queue? But we write from Sync thread.
-            
-            # Simple Hack for Demo:
-            # Just wait for messages? No, we need to push.
-            # Let's just consume the queue and send to ALL?
-            # Creating a dedicated broadcaster task would be best.
-            await asyncio.sleep(0.1)
-            
-            # Flush queue to this client? 
-            # No, queue is global. If one client reads, others miss it.
-            # We need a broadcast system.
-            pass 
-            # Real implementation of Sync->Async bridge is tricky in 1 file.
-            # Let's stick to the previous plan but just not error out.
-            
-    except Exception:
+            try:
+                message = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
+                connection_last_seen[websocket] = time.time()
+                if message == "logout":
+                    break
+            except asyncio.TimeoutError:
+                continue
+    except WebSocketDisconnect:
         pass
     finally:
-        active_connections.remove(websocket)
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+        connection_last_seen.pop(websocket, None)
+        deactivate_runtime()
 
-# Background Broadcaster Task
+
 async def broadcaster():
     while True:
         while not log_queue.empty():
             data = log_queue.get()
+            stale_connections: List[WebSocket] = []
             for connection in active_connections:
                 try:
                     await connection.send_json(data)
-                except:
-                    pass
-        await asyncio.sleep(0.1)
+                except Exception:
+                    stale_connections.append(connection)
+            for connection in stale_connections:
+                if connection in active_connections:
+                    active_connections.remove(connection)
+                    connection_last_seen.pop(connection, None)
+                    deactivate_runtime()
+        await asyncio.sleep(0.05)
+
+
+async def stale_connection_reaper():
+    while True:
+        now = time.time()
+        stale_connections = [
+            connection
+            for connection, last_seen in list(connection_last_seen.items())
+            if (now - last_seen) > HEARTBEAT_TIMEOUT_SECONDS
+        ]
+        for connection in stale_connections:
+            try:
+                await connection.close(code=1001)
+            except Exception:
+                pass
+            if connection in active_connections:
+                active_connections.remove(connection)
+            connection_last_seen.pop(connection, None)
+            deactivate_runtime()
+        await asyncio.sleep(1.0)
+
 
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(broadcaster())
+    asyncio.create_task(stale_connection_reaper())
+
 
 @app.get("/api/stats")
-def get_historical_stats():
-    """
-    Returns historical security events from the PostgreSQL database
-    for the React Analytics Dashboard.
-    """
+def get_historical_stats(current_user: User = Depends(get_current_user)):
     manager = StatsManager()
     return manager.get_stats()
 
+
 @app.get("/api/summary/daily")
-def get_daily_summary(date: str = None):
-    """
-    Returns an end-of-day operational summary. If date is omitted,
-    the report is generated for the current local date.
-    """
+def get_daily_summary(date: str = None, current_user: User = Depends(get_current_user)):
     manager = StatsManager()
     summary_agent = SummaryAgent(manager)
     return summary_agent.generate_daily_summary(date)
 
+
 @app.get("/api/cameras")
-def get_cameras():
+def get_cameras(current_user: User = Depends(get_current_user)):
     registry = CameraRegistry()
     return {"cameras": registry.list_cameras(), "default_camera_id": "cam_01"}
 
+
 @app.put("/api/cameras")
-def update_cameras(payload: CameraConfigPayload):
+def update_cameras(payload: CameraConfigPayload, current_user: User = Depends(get_current_user)):
     registry = CameraRegistry()
     cameras = registry.save_cameras([camera.dict() for camera in payload.cameras])
     return {"cameras": cameras, "default_camera_id": "cam_01"}

@@ -36,8 +36,13 @@ interface CameraInfo {
 }
 
 export const DashboardLayout = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, token, isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const heartbeatIntervalRef = useRef<number | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const currentCameraRef = useRef<CameraInfo | null>(null);
+  const shouldReconnectRef = useRef<boolean>(false);
   
   // Navigation State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'analytics' | 'screenshots'>('dashboard');
@@ -66,6 +71,10 @@ export const DashboardLayout = () => {
   const [activeIncidents, setActiveIncidents] = useState<AgenticIncident[]>([]);
   const [selectedIncident, setSelectedIncident] = useState<AgenticIncident | null>(null);
   const lastCriticalIncidentSeenRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+      currentCameraRef.current = currentCamera;
+  }, [currentCamera]);
   
   // Charts & DB State (Analytics Tab)
   const [chartData, setChartData] = useState<ChartDataPoint[]>(() => {
@@ -80,6 +89,8 @@ export const DashboardLayout = () => {
 
   // Dynamic Chart Update
   useEffect(() => {
+      if (!isAuthenticated) return;
+
       const interval = setInterval(() => {
           setChartData(prev => {
               const newData = [...prev.slice(1)]; 
@@ -94,7 +105,7 @@ export const DashboardLayout = () => {
           });
       }, 60000);
       return () => clearInterval(interval);
-  }, []);
+  }, [isAuthenticated]);
   
   const [events, setEvents] = useState<DBEvent[]>([
        { id: 1024, event: 'SYSTEM_START', time: new Date().toLocaleTimeString(), loc: 'Server', status: 'RESOLVED' }
@@ -102,12 +113,19 @@ export const DashboardLayout = () => {
   
   // Fetch Historical Events on Mount
   useEffect(() => {
+      if (!isAuthenticated) return;
+
+      let isCancelled = false;
+
       const fetchStats = async () => {
           console.log("[Analytics] Fetching historical stats from DB...");
           try {
-              const res = await fetch('http://localhost:8001/api/stats');
+              const res = await fetch('http://localhost:8001/api/stats', {
+                  headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+              });
               if (res.ok) {
                   const data = await res.json();
+                  if (isCancelled) return;
                   console.log("[Analytics] Received stats payload:", data);
                   if (data.events && data.events.length > 0) {
                       console.log(`[Analytics] Found ${data.events.length} events processing into timeline...`);
@@ -156,9 +174,10 @@ export const DashboardLayout = () => {
           }
       };
       fetchStats();
-  }, []);
-  
-  const [ws, setWs] = useState<WebSocket | null>(null);
+      return () => {
+          isCancelled = true;
+      };
+  }, [isAuthenticated, token]);
 
   // Toast Helper
   const addToast = useCallback((type: ToastMessage['type'], title: string, message: string) => {
@@ -173,14 +192,26 @@ export const DashboardLayout = () => {
       setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  const connectWebSocket = () => {
-        if (ws?.readyState === WebSocket.OPEN) return;
+  const connectWebSocket = useCallback(() => {
+        if (!isAuthenticated || !token) return;
+        if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
+            return;
+        }
 
-        const socket = new WebSocket("ws://localhost:8001/ws/stats");
-        setWs(socket);
+        shouldReconnectRef.current = true;
+        const socket = new WebSocket(`ws://localhost:8001/ws/stats?token=${encodeURIComponent(token)}`);
+        wsRef.current = socket;
 
         socket.onopen = () => {
              setIsConnected(true);
+             if (heartbeatIntervalRef.current !== null) {
+                 window.clearInterval(heartbeatIntervalRef.current);
+             }
+             heartbeatIntervalRef.current = window.setInterval(() => {
+                 if (socket.readyState === WebSocket.OPEN) {
+                     socket.send('ping');
+                 }
+             }, 1000);
              addToast('success', 'System Connected', 'Successfully established connection to SecureVision Backend.');
              setLogs(prev => [{type: 'INFO', message: 'System Connected to Backend', timestamp: new Date().toLocaleTimeString()}, ...prev]);
         };
@@ -189,7 +220,16 @@ export const DashboardLayout = () => {
              console.log("WS Closed", e.code);
              setIsConnected(false);
              setFps(0);
-             setTimeout(connectWebSocket, 3000); // Reconnect
+             if (heartbeatIntervalRef.current !== null) {
+                 window.clearInterval(heartbeatIntervalRef.current);
+                 heartbeatIntervalRef.current = null;
+             }
+             wsRef.current = null;
+             if (shouldReconnectRef.current && isAuthenticated) {
+                 reconnectTimeoutRef.current = window.setTimeout(() => {
+                     connectWebSocket();
+                 }, 3000);
+             }
         };
 
         socket.onmessage = (event) => {
@@ -198,6 +238,9 @@ export const DashboardLayout = () => {
                  
                  // 1. LIVE FEED
                  if (data.type === 'LIVE_FEED' && data.objects) {
+                     if (typeof data.fps === 'number') {
+                         setFps(data.fps);
+                     }
                      setLiveObjects(data.objects);
                      if (data.camera) {
                          setCurrentCamera(data.camera);
@@ -258,16 +301,17 @@ export const DashboardLayout = () => {
                  
                  // 4. Critical Images Structure
                  if (data.type === 'CRITICAL_IMAGE') {
-                     const fallbackCamera = currentCamera ? {
-                         camera_name: currentCamera.name,
-                         sector: currentCamera.sector,
-                         area: currentCamera.area,
+                     const fallbackCamera = currentCameraRef.current ? {
+                         camera_name: currentCameraRef.current.name,
+                         sector: currentCameraRef.current.sector,
+                         area: currentCameraRef.current.area,
                      } : {};
                      const imageEntry: CriticalImage = {
                          id: Date.now(),
                          url: data.image_url,
                          description: data.message,
                          timestamp: data.timestamp,
+                         capturedAtMs: Date.now(),
                          metadata: {
                              ...fallbackCamera,
                              ...(data.metadata || {}),
@@ -280,14 +324,47 @@ export const DashboardLayout = () => {
                 console.error("WS Parse Error", e);
             }
         };
-  };
+  }, [addToast, isAuthenticated, token]);
 
   useEffect(() => {
+        if (!isAuthenticated) {
+            shouldReconnectRef.current = false;
+            if (reconnectTimeoutRef.current !== null) {
+                window.clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
+            }
+            if (heartbeatIntervalRef.current !== null) {
+                window.clearInterval(heartbeatIntervalRef.current);
+                heartbeatIntervalRef.current = null;
+            }
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send('logout');
+            }
+            wsRef.current?.close();
+            wsRef.current = null;
+            setIsConnected(false);
+            setFps(0);
+            return;
+        }
+
         connectWebSocket();
         return () => {
-            ws?.close();
+            shouldReconnectRef.current = false;
+            if (reconnectTimeoutRef.current !== null) {
+                window.clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
+            }
+            if (heartbeatIntervalRef.current !== null) {
+                window.clearInterval(heartbeatIntervalRef.current);
+                heartbeatIntervalRef.current = null;
+            }
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send('logout');
+            }
+            wsRef.current?.close();
+            wsRef.current = null;
         };
-  }, []);
+  }, [connectWebSocket, isAuthenticated]);
 
   const handleCriticalEvent = (log: LogEntry) => {
       const time = new Date().toLocaleTimeString();
@@ -327,6 +404,26 @@ export const DashboardLayout = () => {
   };
   
   const handleLogout = () => {
+      shouldReconnectRef.current = false;
+      if (reconnectTimeoutRef.current !== null) {
+          window.clearTimeout(reconnectTimeoutRef.current);
+          reconnectTimeoutRef.current = null;
+      }
+      if (heartbeatIntervalRef.current !== null) {
+          window.clearInterval(heartbeatIntervalRef.current);
+          heartbeatIntervalRef.current = null;
+      }
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send('logout');
+      }
+      wsRef.current?.close();
+      wsRef.current = null;
+      setIsConnected(false);
+      setFps(0);
+      setLiveObjects([]);
+      setCurrentCamera(null);
+      setLatestAgenticAlert(null);
+      setActiveIncidents([]);
       logout();
       navigate('/login');
   };

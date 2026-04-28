@@ -16,20 +16,36 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+const parseUserFromToken = (token: string): User | null => {
+    try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        if (!payload?.sub || !payload?.role) {
+            return null;
+        }
+        return { username: payload.sub, role: payload.role };
+    } catch (e) {
+        console.error("Invalid Token", e);
+        return null;
+    }
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [user, setUser] = useState<User | null>(null);
     const [token, setToken] = useState<string | null>(localStorage.getItem('securevision_token'));
+    const [user, setUser] = useState<User | null>(() => {
+        const storedToken = localStorage.getItem('securevision_token');
+        return storedToken ? parseUserFromToken(storedToken) : null;
+    });
 
     useEffect(() => {
         if (token) {
-            // Primitive decoding for role (Use a real library like jwt-decode in production)
-            try {
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                setUser({ username: payload.sub, role: payload.role });
-            } catch (e) {
-                console.error("Invalid Token", e);
+            const parsedUser = parseUserFromToken(token);
+            if (parsedUser) {
+                setUser(parsedUser);
+            } else {
                 logout();
             }
+        } else {
+            setUser(null);
         }
     }, [token]);
 
@@ -45,7 +61,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     return (
-        <AuthContext.Provider value={{ user, token, login, logout, isAuthenticated: !!token }}>
+        <AuthContext.Provider value={{ user, token, login, logout, isAuthenticated: !!token && !!user }}>
             {children}
         </AuthContext.Provider>
     );

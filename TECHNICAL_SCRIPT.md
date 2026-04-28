@@ -6,7 +6,7 @@ This script is a presentation-oriented walkthrough of the current backend archit
 **Visual focus**: `run_system.py`
 
 **Script**:
-"The current SecureVision runtime starts from `run_system.py`. This file launches FastAPI in the background, opens a mixed surveillance playlist, reads frames through a dedicated video reader thread, and sends each frame into the AI pipeline.
+"The current SecureVision runtime starts from `run_system.py`. This file launches FastAPI in the background, waits for an authenticated dashboard connection, then opens a mixed surveillance playlist, reads frames through a dedicated video reader thread, and sends each frame into the AI pipeline.
 
 It also acts as the bridge between raw computer vision output and operator-facing behavior. After the pipeline returns object states, `run_system.py` normalizes them, evaluates them with deterministic rules, queues speech, submits qualifying alerts to the agentic layer, and broadcasts the results to the frontend."
 
@@ -91,7 +91,9 @@ The operations agent layer runs three agents:
 - incident timeline
 - operator actions
 
-These agents use strict-JSON OpenAI responses with fallbacks. They do not change severity, event type, or risk score. Their role is to explain the incident, summarize how it is evolving, and present context-aware instructions to the operator."
+These agents use strict structured outputs with deterministic fallbacks. They do not change severity, event type, or risk score. Their role is to explain the incident, summarize how it is evolving, and present context-aware instructions to the operator."
+
+"In the current version, that intelligence layer is implemented as a bounded LangChain orchestration stage. It still preserves strict structured outputs and deterministic fallbacks, but now the triage, timeline, and action steps are modeled as specialist chains rather than a single direct wrapper call."
 
 ---
 
@@ -119,7 +121,7 @@ For critical incidents, `cloudinary_helper.py` uploads evidence screenshots and 
 - screenshot evidence
 - historical analytics
 
-The frontend stays relatively presentation-focused. Most of the real operational logic lives on the backend, which keeps the system behavior more consistent and easier to audit."
+The dashboard also shows live FPS from the backend stream and supports working evidence filters for recent captures. The frontend stays relatively presentation-focused. Most of the real operational logic lives on the backend, which keeps the system behavior more consistent and easier to audit."
 
 ---
 

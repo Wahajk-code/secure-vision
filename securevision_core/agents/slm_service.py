@@ -4,18 +4,15 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from agents.langchain_runtime import LangChainAgentRuntime
+from agents.tools import AgentContextTools
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-try:
-    from openai import OpenAI
-except ImportError:  # pragma: no cover - safe fallback when dependency is missing
-    OpenAI = None
-
 
 class SLMService:
-    """Small language model helper for strict JSON agent outputs with safe fallbacks."""
+    """Bounded intelligence adapter with LangChain-first structured output and deterministic fallbacks."""
 
     DEFAULT_MODEL = "gpt-4o-mini"
     TIMEOUT_SECONDS = 5.0
@@ -25,8 +22,15 @@ class SLMService:
         self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
         requested_model = os.getenv("OPENAI_MODEL", self.DEFAULT_MODEL).strip() or self.DEFAULT_MODEL
         self.model = self.DEFAULT_MODEL if requested_model != self.DEFAULT_MODEL else requested_model
-        self.client = None
         self.disabled_reason: Optional[str] = None
+        self.context_tools = AgentContextTools()
+        self.runtime = LangChainAgentRuntime(
+            api_key=self.api_key,
+            model=self.model,
+            timeout_seconds=self.TIMEOUT_SECONDS,
+            temperature=self.TEMPERATURE,
+            context_tools=self.context_tools,
+        )
 
         if requested_model != self.DEFAULT_MODEL:
             logger.warning(
@@ -35,57 +39,24 @@ class SLMService:
                 self.DEFAULT_MODEL,
             )
 
-        if self.api_key and OpenAI is not None:
-            try:
-                self.client = OpenAI(api_key=self.api_key, timeout=self.TIMEOUT_SECONDS)
-            except Exception as exc:  # pragma: no cover - runtime safety
-                logger.error("[SLM] Failed to initialize OpenAI client: %s", exc)
-                self.client = None
+        if self.runtime.disabled_reason:
+            self.disabled_reason = self.runtime.disabled_reason
 
     def generate_json(self, system_prompt: str, payload: Dict[str, Any], agent_name: str) -> Dict[str, Any]:
-        """Generate strict JSON for an agent or return a deterministic fallback."""
-        if self.disabled_reason or not self.client or not self.api_key:
+        """Generate strict JSON for an agent chain or return a deterministic fallback."""
+        if self.disabled_reason or not self.runtime.is_available:
             self._log_usage(agent_name, payload, "fallback", None)
             return self.fallback_response(agent_name, payload)
 
-        schema = self._schema_for_agent(agent_name)
         estimated_tokens = self._estimate_tokens(system_prompt, payload)
 
         try:
-            response = self.client.responses.create(
-                model=self.model,
-                instructions=system_prompt,
-                input=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": json.dumps(payload, ensure_ascii=True),
-                            }
-                        ],
-                    }
-                ],
-                temperature=self.TEMPERATURE,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": f"{agent_name}_response",
-                        "strict": True,
-                        "schema": schema,
-                    }
-                },
-            )
-
-            parsed = self.safe_parse(getattr(response, "output_text", ""))
-            if parsed is None:
-                raise ValueError("Model returned invalid JSON")
-
-            self._log_usage(agent_name, payload, "success", response, estimated_tokens)
+            parsed = self.runtime.run_agent(agent_name, system_prompt, payload)
+            self._log_usage(agent_name, payload, "success", None, estimated_tokens)
             return parsed
         except Exception as exc:  # pragma: no cover - runtime safety
             self.disabled_reason = str(exc)
-            self.client = None
+            self.runtime.disabled_reason = str(exc)
             logger.warning("[SLM] Falling back for agent=%s error=%s", agent_name, exc)
             self._log_usage(agent_name, payload, "fallback", None, estimated_tokens)
             return self.fallback_response(agent_name, payload)
@@ -230,57 +201,3 @@ class SLMService:
             return ["Inspect item", "Monitor area", "Escalate if needed"]
         return ["Monitor scene", "Review event details", "Escalate if needed"]
 
-    @staticmethod
-    def _schema_for_agent(agent_name: str) -> Dict[str, Any]:
-        if agent_name == "triage":
-            return {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "dashboard_title": {"type": "string"},
-                    "operator_summary": {"type": "string"},
-                    "risk_explanation": {"type": "string"},
-                    "recommended_priority": {"type": "string"},
-                    "tts_message": {"type": "string"},
-                    "requires_operator_review": {"type": "boolean"},
-                },
-                "required": [
-                    "dashboard_title",
-                    "operator_summary",
-                    "risk_explanation",
-                    "recommended_priority",
-                    "tts_message",
-                    "requires_operator_review",
-                ],
-            }
-
-        if agent_name == "timeline":
-            return {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "incident_title": {"type": "string"},
-                    "timeline_summary": {"type": "string"},
-                    "recommended_next_step": {"type": "string"},
-                },
-                "required": ["incident_title", "timeline_summary", "recommended_next_step"],
-            }
-
-        if agent_name == "actions":
-            return {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "action_plan": {"type": "array", "items": {"type": "string"}},
-                    "operator_note": {"type": "string"},
-                    "escalation_hint": {"type": "string"},
-                },
-                "required": ["action_plan", "operator_note", "escalation_hint"],
-            }
-
-        return {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {"message": {"type": "string"}},
-            "required": ["message"],
-        }

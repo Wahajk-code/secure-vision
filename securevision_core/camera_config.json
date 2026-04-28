@@ -2,8 +2,8 @@
   "cameras": [
     {
       "id": "cam_01",
-      "name": "Camera 1",
-      "sector": "Sector A onga bonga place",
+      "name": "Camera 0",
+      "sector": "place",
       "area": "Area A - Main Entrance",
       "is_active": true
     },
@@ -17,7 +17,7 @@
     {
       "id": "cam_03",
       "name": "Camera 3",
-      "sector": "Sector C the abbasid empire",
+      "sector": "Sector C the abbasid empire  222",
       "area": "Area C - Corridor",
       "is_active": true
     },

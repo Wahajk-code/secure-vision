@@ -13,9 +13,9 @@ The current system is built around:
 - a React/TypeScript operations dashboard in `securevision_frontend`
 - PostgreSQL event storage for history and analytics
 - a deterministic alert rules layer for severity, risk score, and spoken alerts
-- an OpenAI-backed agentic layer for operator summaries, incident timelines, and action plans
+- a LangChain-backed bounded agentic layer for operator summaries, incident timelines, and action plans
 
-Core system rules remain the source of truth. The OpenAI layer is used only for explanation, summaries, and operator guidance.
+Core system rules remain the source of truth. The LangChain layer is used only for explanation, summaries, and operator guidance.
 
 ## 2. Current Runtime Architecture
 
@@ -29,6 +29,8 @@ The active backend/runtime path is:
 `run_system.py` is the primary entrypoint. It:
 
 - starts FastAPI on port `8001`
+- stays idle until an authenticated dashboard WebSocket connects
+- pauses processing when the last authenticated dashboard WebSocket disconnects
 - loads a mixed local video playlist from `securevision_core/testvideos`
 - assigns each video to a logical camera ID
 - reads frames in a background reader thread
@@ -50,6 +52,8 @@ The active dashboard is the React app in `securevision_frontend`. It provides:
 - agentic alert and operator action cards
 - analytics based on database history
 - critical evidence/screenshot review
+- live FPS display from backend stream data
+- working evidence session/timeline filters
 - camera, sector, and area settings
 - account deletion and logout flows
 
@@ -59,7 +63,7 @@ The active dashboard is the React app in `securevision_frontend`. It provides:
 ## 3. End-to-End Flow
 
 ### 3.1 Frame Ingestion
-`run_system.py` uses `VideoReaderThread` to continuously decode a playlist of local test videos. Each playlist item is mapped to a logical camera such as `cam_01` through `cam_04`.
+When the authenticated dashboard is active, `run_system.py` uses `VideoReaderThread` to continuously decode a playlist of local test videos. Each playlist item is mapped to a logical camera such as `cam_01` through `cam_04`.
 
 The reader thread:
 
@@ -153,18 +157,18 @@ That orchestration layer runs:
 2. `IncidentTimelineAgent`
 3. `OperatorActionAgent`
 
-OpenAI is used only for:
+LangChain is used only for:
 
 - dashboard/operator summaries
 - incident titles and timeline summaries
 - operator action plans and escalation hints
 
-OpenAI does not override severity, event type, risk score, or the core alert decision.
+LangChain does not override severity, event type, risk score, or the core alert decision.
 
 ### 3.9 Broadcasting
 `api/main.py` exposes:
 
-- `ws://localhost:8001/ws/stats`
+- `ws://localhost:8001/ws/stats?token=<jwt>`
 
 The backend broadcasts:
 
@@ -174,6 +178,8 @@ The backend broadcasts:
 - `AGENTIC_ALERT`
 - `CRITICAL_IMAGE`
 - periodic FPS/info logs
+
+The `LIVE_FEED` payload includes the current camera context and live FPS values used by the dashboard header/cards.
 
 ### 3.10 Evidence Capture
 Critical events can trigger evidence capture and async upload through:
@@ -261,6 +267,7 @@ Authentication uses:
 - SQLAlchemy `users` table
 - JWT bearer tokens
 - Passlib password hashing
+- runtime gating that activates processing only while an authenticated dashboard socket is alive
 
 Current auth endpoints:
 
@@ -290,7 +297,10 @@ Current auth endpoints:
 - `event_normalizer.py`: pipeline object normalization
 - `tts_agent.py`: cooldown-aware non-blocking spoken alert queue
 - `summary_agent.py`: daily summary generation
-- `slm_service.py`: strict-JSON OpenAI wrapper with fallback logic
+- `langchain_runtime.py`: LangChain chain runtime for specialist incident agents
+- `tools.py`: deterministic context tools for camera, rule, incident, and operator context
+- `schemas.py`: typed structured outputs for specialist chains
+- `slm_service.py`: LangChain-first compatibility adapter with deterministic fallback logic
 - `alert_triage_agent.py`: operator-facing triage summaries
 - `incident_timeline_agent.py`: in-memory incident grouping and timeline summaries
 - `operator_action_agent.py`: rule-based templates plus contextual operator guidance
@@ -324,10 +334,16 @@ Current auth endpoints:
 - `src/components/DatabaseView.tsx`
 - `src/components/Sidebar.tsx`
 
+Current frontend behavior:
+
+- the dashboard opens the backend socket only for authenticated users
+- FPS is updated from live socket payloads
+- evidence filters apply to captured-image timestamps in memory
+
 ## 7. Interfaces
 
 ### 7.1 WebSocket
-- `GET ws://localhost:8001/ws/stats`
+- `GET ws://localhost:8001/ws/stats?token=<jwt>`
 
 Used for:
 
@@ -407,6 +423,8 @@ Important backend packages include:
 - `pyttsx3`
 - `cloudinary`
 - `openai`
+- `langchain`
+- `langchain-openai`
 - `streamlit` for the legacy UI path
 
 ### 9.3 Frontend Dependencies
@@ -452,9 +470,9 @@ Important frontend packages include:
 - `layer2_logic.py` exists but is not the active fight path.
 - `VideoFeed.tsx` is not part of the current dashboard flow and still points to an older MJPEG endpoint on port `8000`.
 - `securevision_core/main.py` and `securevision_core/ui/` represent a legacy Streamlit path.
-- `api/main.py` currently provides the WebSocket/REST API, but it still contains some older duplicate/comment-heavy scaffolding that is a cleanup candidate.
-- the OpenAI/SLM layer is designed with strict JSON responses and deterministic fallbacks
-- OpenAI calls are cost-controlled and not run per frame
+- the LangChain intelligence layer is bounded specialist-chain orchestration, not a free-loop autonomous agent.
+- the LangChain/SLM layer is designed with strict structured outputs and deterministic fallbacks.
+- model calls are cost-controlled and not run per frame.
 
 ## 12. Recommended Startup Path
 
@@ -463,11 +481,13 @@ Important frontend packages include:
 3. Set `OPENAI_API_KEY` and optionally `OPENAI_MODEL=gpt-4o-mini`.
 4. Run `securevision_core/run_system.py`.
 5. Run the React frontend in `securevision_frontend`.
-6. Open the dashboard and connect to `ws://localhost:8001/ws/stats`.
+6. Login successfully through the dashboard.
+7. Connect to `ws://localhost:8001/ws/stats?token=<jwt>`.
 
 This path provides:
 
 - live AI processing
+- runtime pause/resume based on active authenticated dashboard presence
 - deterministic operational alerts
 - agentic summaries and operator guidance
 - database-backed analytics

@@ -13,3 +13,5 @@ bcrypt
 sqlalchemy
 pyttsx3
 openai
+langchain
+langchain-openai

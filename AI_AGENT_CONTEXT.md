@@ -28,7 +28,7 @@ The rule engine in `securevision_core/agents/alert_rules.py` is the source of tr
 - whether an alert should be raised
 - spoken alert text
 
-Do not move these decisions into the OpenAI layer.
+Do not move these decisions into the LangChain intelligence layer.
 
 ### 2.2 Expensive Models Are Gated
 The system avoids running heavy models on the whole frame where possible.
@@ -49,8 +49,13 @@ The rough flow is:
 6. `alert_rules.py` evaluates severity/score/action
 7. `run_system.py` broadcasts alerts, queues TTS, submits agentic enrichment
 
-### 2.4 OpenAI Is Explanation-Only
-The OpenAI-backed layer in `securevision_core/agents/` is used only for:
+Important runtime gate:
+
+- the backend processing loop is only active while an authenticated dashboard WebSocket is connected
+- logging in alone is not enough; the protected dashboard route must actually open the stats socket
+
+### 2.4 LangChain Is Explanation-Only
+The LangChain-backed intelligence layer in `securevision_core/agents/` is used only for:
 
 - triage summaries
 - incident timeline wording
@@ -65,7 +70,7 @@ It must not override:
 - whether the system should alert
 
 ### 2.5 Cost Control Matters
-The agentic/OpenAI layer is not called per frame.
+The agentic/LangChain layer is not called per frame.
 
 It is gated by:
 
@@ -80,6 +85,7 @@ It is gated by:
   - main runtime loop
   - playlist handling
   - FastAPI thread startup
+  - runtime pause/resume gating based on authenticated dashboard presence
   - alert broadcasting
   - TTS queueing
   - agentic submission
@@ -115,6 +121,9 @@ Important note:
 - `securevision_core/agents/alert_rules.py`
 - `securevision_core/agents/tts_agent.py`
 - `securevision_core/agents/summary_agent.py`
+- `securevision_core/agents/langchain_runtime.py`
+- `securevision_core/agents/tools.py`
+- `securevision_core/agents/schemas.py`
 - `securevision_core/agents/slm_service.py`
 - `securevision_core/agents/alert_triage_agent.py`
 - `securevision_core/agents/incident_timeline_agent.py`
@@ -135,6 +144,11 @@ Important note:
 - `securevision_frontend/src/components/ActiveIncidentsPanel.tsx`
 - `securevision_frontend/src/components/OperatorActionCard.tsx`
 - `securevision_frontend/src/components/IncidentDetailModal.tsx`
+
+Frontend notes:
+
+- `DashboardLayout.tsx` opens the authenticated WebSocket only when `isAuthenticated` is true
+- `StatsPanel.tsx` shows live FPS and applies working session/timeline evidence filters
 
 ## 4. Models In Use
 The current active code path references:
@@ -184,7 +198,8 @@ Important behavior:
 ### 6.1 `SLMService`
 - uses `OPENAI_API_KEY`
 - required model is `gpt-4o-mini`
-- expects strict JSON
+- routes triage, timeline, and actions through LangChain structured-output chains
+- injects deterministic camera/rule/incident/operator context into each chain
 - has deterministic fallback responses
 - disables model usage for the run if the API fails
 
@@ -208,7 +223,7 @@ It returns a payload like:
 ```
 
 ### 6.3 `OperatorActionAgent`
-Starts with deterministic action templates and uses OpenAI only to personalize:
+Starts with deterministic action templates and uses the LangChain-backed layer only to personalize:
 
 - `action_plan`
 - `operator_note`
@@ -230,9 +245,16 @@ The personalization now uses:
 - `securevision_frontend/src/components/VideoFeed.tsx` is not part of the current dashboard flow
 - `securevision_core/core_pipeline/layer2_logic.py` is legacy
 - `securevision_core/mock_models/` is not part of the current runtime
-- `securevision_core/api/main.py` still contains some duplicated/comment-heavy scaffolding that could be cleaned up
+- the LangChain runtime is bounded orchestration, not a free-loop autonomous agent
 
-## 8. Recommended Startup Path
+## 8. Auth And Runtime Gating
+- successful authentication allows the protected dashboard to open the stats WebSocket
+- the detection loop starts only while that authenticated WebSocket is connected
+- the detection loop pauses when the last authenticated dashboard connection closes
+- `ws://localhost:8001/ws/stats?token=<jwt>` is the required authenticated socket format
+- stats and camera APIs require bearer authentication
+
+## 9. Recommended Startup Path
 
 1. Start PostgreSQL
 2. Ensure the active model files are present
@@ -241,4 +263,5 @@ The personalization now uses:
    - `OPENAI_MODEL=gpt-4o-mini`
 4. Run `securevision_core/run_system.py`
 5. Run the React frontend
-6. Connect to `ws://localhost:8001/ws/stats`
+6. Login successfully
+7. Connect to `ws://localhost:8001/ws/stats?token=<jwt>`

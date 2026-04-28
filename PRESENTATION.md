@@ -17,8 +17,8 @@
 **Key Components**:
 1. **Backend Runtime**
    - Python + FastAPI
-   - Processes video feeds frame-by-frame
-   - Broadcasts real-time updates over WebSockets
+   - Processes video feeds frame-by-frame only while an authenticated dashboard session is active
+   - Broadcasts real-time updates over authenticated WebSockets
 2. **Frontend Dashboard**
    - React + TypeScript
    - Displays live targets, incidents, screenshots, and analytics
@@ -69,7 +69,7 @@ This is important because operator trust depends on stable, explainable decision
 ## Slide 5: Agentic Assistance Layer
 **Design Principle**: "AI explains, but does not override"
 
-The OpenAI-backed layer provides:
+The LangChain-backed bounded agentic layer provides:
 
 1. **Alert Triage Agent**
    - dashboard title
@@ -86,7 +86,7 @@ The OpenAI-backed layer provides:
 
 Important rule:
 
-- OpenAI does not control severity, event type, risk score, or whether an alert is real.
+- LangChain does not control severity, event type, risk score, or whether an alert is real.
 
 ---
 
@@ -98,6 +98,8 @@ Important rule:
 - Agentic alert card for highlighted incident summaries
 - Operator action card for response guidance
 - Screenshot/evidence gallery
+- Live FPS display
+- Working session/timeline evidence filters
 - Analytics and historical event views
 - Camera/sector/area settings
 
@@ -139,16 +141,17 @@ Important rule:
 | Analytics | Recharts | Historical visualization |
 | Storage | PostgreSQL | Event history |
 | Evidence | Cloudinary | Critical screenshot hosting |
-| Agentic layer | OpenAI API | Summaries and operator guidance |
+| Agentic layer | LangChain + OpenAI API | Summaries and operator guidance |
 
 ---
 
 ## Slide 10: Demonstration Flow
 1. Start backend runtime
 2. Start React dashboard
-3. Observe live target tracking
-4. Trigger a warning or critical event
-5. Show:
+3. Login to activate the protected dashboard session
+4. Observe live target tracking
+5. Trigger a warning or critical event
+6. Show:
    - rule-based alert
    - spoken notification
    - screenshot/evidence upload

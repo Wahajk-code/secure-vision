@@ -14,6 +14,7 @@ export interface CriticalImage {
     url: string;
     description: string;
     timestamp: string;
+    capturedAtMs?: number;
     metadata?: {
         camera_id?: string;
         camera_name?: string;
@@ -37,14 +38,29 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ fps, criticalImages = []
 
     // Filter Logic
     const filteredImages = useMemo(() => {
-        return criticalImages.filter(() => {
-            // In a real app, parse `img.timestamp` into a Date object and compare.
-            // For now, this is a visual UI implementation as requested.
-            return true; 
+        const now = Date.now();
+        const currentShift = Math.floor(now / (8 * 60 * 60 * 1000));
+
+        return criticalImages.filter((img) => {
+            const capturedAt = img.capturedAtMs ?? now;
+            const ageMs = now - capturedAt;
+            const imageShift = Math.floor(capturedAt / (8 * 60 * 60 * 1000));
+
+            const sessionMatches =
+                selectedSession === 'All' ||
+                (selectedSession === 'Current Shift' && imageShift === currentShift) ||
+                (selectedSession === 'Previous Shift' && imageShift === currentShift - 1);
+
+            const timelineMatches =
+                selectedTimeline === 'Anytime' ||
+                (selectedTimeline === 'Last Hour' && ageMs <= 60 * 60 * 1000) ||
+                (selectedTimeline === 'Last 24h' && ageMs <= 24 * 60 * 60 * 1000);
+
+            return sessionMatches && timelineMatches;
         });
     }, [criticalImages, selectedSession, selectedTimeline]);
 
-    const expandedImage = criticalImages.find(img => img.id === expandedImageId) || null;
+    const expandedImage = filteredImages.find(img => img.id === expandedImageId) || criticalImages.find(img => img.id === expandedImageId) || null;
 
     return (
         <div className="flex flex-col h-full bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl relative group overflow-hidden">

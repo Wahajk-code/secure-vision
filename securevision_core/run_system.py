@@ -22,6 +22,7 @@ from core_pipeline.pipeline import SecureVisionPipeline
 from utils.logger import setup_logger
 from utils.cloudinary_helper import upload_image_async
 from utils.camera_registry import CameraRegistry
+from runtime_gate import runtime_is_active, wait_for_runtime
 
 # Setup Logger
 logger = setup_logger()
@@ -227,8 +228,6 @@ def main():
     api_thread = threading.Thread(target=run_api, daemon=True)
     api_thread.start()
     logger.info("FastAPI Server started on http://localhost:8001")
-
-    # 3. Start Video Pipeline (Main Thread)
     video_dir = os.path.join(os.path.dirname(__file__), 'testvideos')
     playlist = [
         {"source": os.path.join(video_dir, 'gunmantest3.mp4'), "camera_id": "cam_01"},
@@ -238,25 +237,46 @@ def main():
         {"source": os.path.join(video_dir, 'luggage1final.mp4'), "camera_id": "cam_01"},
         {"source": os.path.join(video_dir, 'luggage2final.mp4'), "camera_id": "cam_02"},
     ]
-    
-    # 3. Start Async Video Reader Thread
-    video_reader = VideoReaderThread(playlist, queue_size=60)
-    video_reader.start()
-
-    initial_camera = camera_registry.get_camera("cam_01")
-    pipeline = SecureVisionPipeline(stream_id="desktop_stream_cam_01")
+    video_reader = None
+    pipeline = None
     frame_count = 0
-    
-    logger.info("Opening Native Video Window for playlist. Waiting for AI loop to spin up...")
-    logger.info(
-        "[MIXED FEED] Now showing %s / %s / %s",
-        initial_camera.get("name"),
-        initial_camera.get("sector"),
-        initial_camera.get("area"),
-    )
-    logger.info("Press 'Q' in the video window to quit.")
+    runtime_active = False
+
+    logger.info("Runtime idle. Waiting for an authenticated dashboard connection before starting video processing...")
 
     while running:
+        if not runtime_is_active():
+            if runtime_active:
+                logger.info("Dashboard disconnected. Pausing backend processing and closing monitoring window.")
+                runtime_active = False
+                if video_reader:
+                    video_reader.stop()
+                    video_reader.join(timeout=2.0)
+                    video_reader = None
+                pipeline = None
+                frame_count = 0
+                alert_states.clear()
+                alert_group_sent.clear()
+                cv2.destroyAllWindows()
+            wait_for_runtime(timeout=1.0)
+            continue
+
+        if not runtime_active:
+            runtime_active = True
+            logger.info("Authenticated dashboard connection detected. Starting backend processing.")
+            video_reader = VideoReaderThread(playlist, queue_size=60)
+            video_reader.start()
+            initial_camera = camera_registry.get_camera("cam_01")
+            pipeline = SecureVisionPipeline(stream_id="desktop_stream_cam_01")
+            frame_count = 0
+            logger.info(
+                "[MIXED FEED] Now showing %s / %s / %s",
+                initial_camera.get("name"),
+                initial_camera.get("sector"),
+                initial_camera.get("area"),
+            )
+            logger.info("Press 'Q' in the video window to quit.")
+
         # Pull pre-decoded frame instantly from memory (will block lightly if thread is catching up)
         try:
             action, frame, source_entry = video_reader.frame_queue.get(timeout=1.0)
@@ -330,19 +350,20 @@ def main():
         else:
             cleanup_alert_states(set())
 
+        # Calculate Dynamic FPS
+        elapsed = time.time() - start_time
+        current_fps = 1.0 / elapsed if elapsed > 0 else 30.0
+
         if frame_count % 3 == 0: # Broadcast objects every 3rd frame to save bandwidth
              broadcast_log_sync({
                  "type": "LIVE_FEED",
                  "objects": log_data, # log_data is now 'luggage_dashboard_data' which contains all objects
                  "camera": camera,
+                 "fps": round(current_fps, 1),
                  "timestamp": time.strftime("%H:%M:%S")
              })
-             
-        # Calculate Dynamic FPS
-        elapsed = time.time() - start_time
-        current_fps = 1.0 / elapsed if elapsed > 0 else 30.0
 
-        if frame_count % 300 == 0:
+        if frame_count % 90 == 0:
              broadcast_log_sync({
                  "fps": round(current_fps, 1),
                  "log": {
@@ -375,8 +396,9 @@ def main():
 
     # Cleanup
     running = False
-    video_reader.stop()
-    video_reader.join(timeout=2.0)
+    if video_reader:
+        video_reader.stop()
+        video_reader.join(timeout=2.0)
     cv2.destroyAllWindows()
     logger.info("System Shutdown Complete.")
     sys.exit(0)

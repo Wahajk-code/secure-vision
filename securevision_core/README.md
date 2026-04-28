@@ -12,13 +12,15 @@ The current integrated runtime path is:
 `run_system.py` is the recommended entrypoint. It:
 
 - starts FastAPI on port `8001`
+- stays idle until an authenticated dashboard WebSocket connects
+- pauses processing again when the last authenticated dashboard WebSocket disconnects
 - runs the mixed local video playlist
 - processes frames through the AI pipeline
 - evaluates alerts with deterministic rules
 - queues TTS
 - submits qualifying incidents to the agentic layer
 - uploads critical evidence to Cloudinary
-- broadcasts results over `ws://localhost:8001/ws/stats`
+- broadcasts results over the authenticated stats WebSocket
 
 ## Main Components
 
@@ -35,7 +37,10 @@ The current integrated runtime path is:
 - `agents/event_normalizer.py`: pipeline event normalization
 - `agents/alert_rules.py`: deterministic severity, score, and messaging
 - `agents/tts_agent.py`: spoken alert queue/cooldowns
-- `agents/slm_service.py`: OpenAI strict-JSON wrapper
+- `agents/langchain_runtime.py`: LangChain-backed bounded intelligence runtime
+- `agents/tools.py`: deterministic context tools for camera/rule/incident/operator context
+- `agents/schemas.py`: typed structured outputs for triage/timeline/actions
+- `agents/slm_service.py`: LangChain-first adapter with deterministic fallback mode
 - `agents/operations_agent_layer.py`: triage/timeline/actions orchestration
 
 ### API And Utilities
@@ -70,7 +75,7 @@ Important environment variables include:
 ## API
 
 ### WebSocket
-- `ws://localhost:8001/ws/stats`
+- `ws://localhost:8001/ws/stats?token=<jwt>`
 
 ### REST
 - `GET /api/stats`
@@ -93,3 +98,35 @@ Fallback behavior:
 
 - `yolo11n-pose.pt` at the repo root is only a pose-model fallback
 - it is not part of the normal primary model set
+
+## Agentic Layer Notes
+The current intelligence layer is a bounded LangChain orchestration stage, not a free-loop autonomous agent.
+
+Flow:
+
+1. deterministic detection and alert rules decide whether an incident exists
+2. `OperationsAgentLayer` runs three specialist chains:
+   - triage
+   - timeline
+   - actions
+3. each chain receives deterministic tool-backed context and returns strict structured output
+4. the merged `AGENTIC_ALERT` is broadcast to the frontend
+
+Dashboard behavior:
+
+- live FPS is streamed from the backend over the authenticated WebSocket
+- evidence filters in the dashboard operate on live in-memory capture timestamps
+
+LangChain is allowed to generate:
+
+- operator summaries
+- incident continuity summaries
+- action wording
+- escalation hints
+
+LangChain is not allowed to change:
+
+- `severity`
+- `event_type`
+- `risk_score`
+- alert validity

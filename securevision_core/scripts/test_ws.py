@@ -1,9 +1,15 @@
 import asyncio
-import websockets
 import json
+import os
+
+import websockets
 
 async def test_connection():
-    uri = "ws://localhost:8001/ws/stats"
+    token = os.getenv("SECUREVISION_TEST_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("Set SECUREVISION_TEST_TOKEN before running the websocket smoke test.")
+
+    uri = f"ws://localhost:8001/ws/stats?token={token}"
     print(f"Attempting to connect to {uri}...")
     try:
         async with websockets.connect(uri) as websocket:
