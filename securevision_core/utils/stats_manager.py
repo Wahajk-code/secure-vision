@@ -1,6 +1,7 @@
 import json
 import time
 from datetime import datetime
+import threading
 import psycopg2
 from config import DB_CONFIG
 from config import WEAPON_CONFIRMATION_FRAMES
@@ -8,9 +9,47 @@ from agents.alert_rules import AlertRuleEngine
 from utils.camera_registry import CameraRegistry
 
 class StatsManager:
+    _schema_lock = threading.Lock()
+    _schema_initialized = False
+
     def __init__(self):
         self.alert_rules = AlertRuleEngine()
         self.camera_registry = CameraRegistry()
+        self._ensure_schema()
+
+    def _ensure_schema(self):
+        if StatsManager._schema_initialized:
+            return
+
+        with StatsManager._schema_lock:
+            if StatsManager._schema_initialized:
+                return
+
+            conn = self._get_connection()
+            if not conn:
+                return
+
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS security_events (
+                        id SERIAL PRIMARY KEY,
+                        timestamp FLOAT,
+                        datetime TIMESTAMP,
+                        event_type VARCHAR(50),
+                        details JSONB,
+                        stream_id VARCHAR(100)
+                    )
+                    """
+                )
+                conn.commit()
+                cur.close()
+                StatsManager._schema_initialized = True
+            except Exception as e:
+                print(f"Error ensuring stats table schema: {e}")
+            finally:
+                conn.close()
 
     def _get_connection(self):
         try:

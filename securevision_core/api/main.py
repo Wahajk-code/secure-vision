@@ -53,7 +53,7 @@ logger = setup_logger()
 active_connections: List[WebSocket] = []
 connection_last_seen: Dict[WebSocket, float] = {}
 log_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
-HEARTBEAT_TIMEOUT_SECONDS = 3.0
+HEARTBEAT_TIMEOUT_SECONDS = 15.0
 
 
 def broadcast_log_sync(log_entry: Dict[str, Any]):
@@ -111,6 +111,7 @@ async def broadcaster():
             for connection in active_connections:
                 try:
                     await connection.send_json(data)
+                    connection_last_seen[connection] = time.time()
                 except Exception:
                     stale_connections.append(connection)
             for connection in stale_connections:

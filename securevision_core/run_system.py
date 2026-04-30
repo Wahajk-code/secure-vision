@@ -230,9 +230,10 @@ def main():
     logger.info("FastAPI Server started on http://localhost:8001")
     video_dir = os.path.join(os.path.dirname(__file__), 'testvideos')
     playlist = [
-        {"source": os.path.join(video_dir, 'gunmantest3.mp4'), "camera_id": "cam_01"},
-        {"source": os.path.join(video_dir, 'test6.mp4'), "camera_id": "cam_02"},
+        {"source": os.path.join(video_dir, 'gunmantest3.mp4'), "camera_id": "cam_02"},
+        {"source": os.path.join(video_dir, 'test6.mp4'), "camera_id": "cam_03"},
         {"source": os.path.join(video_dir, 'fight1final.mp4'), "camera_id": "cam_03"},
+        {"source": os.path.join(video_dir, 'gun5.mp4'), "camera_id": "cam_01"},
         {"source": os.path.join(video_dir, 'fight2final.mp4'), "camera_id": "cam_04"},
         {"source": os.path.join(video_dir, 'luggage1final.mp4'), "camera_id": "cam_01"},
         {"source": os.path.join(video_dir, 'luggage2final.mp4'), "camera_id": "cam_02"},

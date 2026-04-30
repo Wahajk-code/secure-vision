@@ -44,5 +44,6 @@ async def signup(form_data: OAuth2PasswordRequestForm = Depends(), db: Session =
     db.add(new_user)
     db.commit()
     
-    access_token = create_access_token(data={"sub": new_user.username, "role": new_user.role})
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data={"sub": new_user.username, "role": new_user.role}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}

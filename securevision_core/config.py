@@ -63,7 +63,7 @@ DB_CONFIG = {
     "host": "localhost",
     "port": "5432",
     "user": "postgres", # Assumed default from user context
-    "password": "wahaj123",
+    "password": "1234",
     "dbname": "fyp"
 }
 
